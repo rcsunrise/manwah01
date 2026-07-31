@@ -17,7 +17,7 @@ import {
   CheckSquare, Square, PlusCircle, Key, Languages, Pause, Play,
   ChevronDown, ChevronUp, ScanFace, Tag, Maximize2, Minimize2, MinusCircle, ArrowDownUp, Lightbulb, ImageIcon
 } from '../components/IconsNew';
-import { generateEditedImage, generateImageDescription, rewritePrompt, analyzeImageAEP, rewritePromptWithAEP, measureImagePixels } from '../services/geminiService';
+import { generateEditedImage, generateImageDescription, rewritePrompt, analyzeImageAEP, rewritePromptWithAEP, measureImagePixels, generateVideo } from '../services/geminiService';
 import { dbService, MAX_STORAGE_BYTES } from '../services/dbService';
 import { supabase } from '../lib/supabase';
 import { CRAFT_VOCABULARY, CraftVocabItem } from '../data/craftVocab';
@@ -847,7 +847,6 @@ You MUST adjust the proportions. The side view width MUST be exactly ${Math.roun
 
         setIsGenerating(true);
         try {
-          const { generateVideo } = await import('../services/geminiService');
           const videoUrl = await generateVideo(videoPrompt, dummyImage, '16:9', () => {});
           
           // Add a new task for the video result

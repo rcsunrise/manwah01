@@ -1223,6 +1223,21 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
   // API Route for Admin to test API connection
   app.post('/api/admin/test-connection', express.json(), async (req, res) => {
     try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      const token = authHeader.split(' ')[1];
+      const { data: { user: adminUser }, error: verifyError } = await supabaseAdmin.auth.getUser(token);
+      if (verifyError || !adminUser) {
+        return res.status(401).json({ error: 'Invalid token' });
+      }
+      
+      const { data: adminProfile } = await supabaseAdmin.from('profiles').select('role').eq('id', adminUser.id).single();
+      if (!adminProfile || (adminProfile.role !== 'admin' && adminProfile.role !== 'dept_admin')) {
+         return res.status(403).json({ error: 'Forbidden' });
+      }
+
       const { baseUrl, apiKey, provider } = req.body;
       if (!baseUrl || !apiKey) {
         return res.status(400).json({ success: false, message: "Missing baseUrl or apiKey" });
@@ -1479,12 +1494,18 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
         return res.status(400).json({ error: 'Missing userId or newPassword.' });
       }
 
-      // Check admin status of requester
-      const adminId = req.headers['x-user-id'] as string;
-      if (!adminId) {
-         return res.status(401).json({ error: 'Unauthorized.' });
+      // Check admin status of requester via JWT
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      const token = authHeader.split(' ')[1];
+      const { data: { user: adminUser }, error: verifyError } = await supabaseAdmin.auth.getUser(token);
+      if (verifyError || !adminUser) {
+        return res.status(401).json({ error: 'Invalid token' });
       }
       
+      const adminId = adminUser.id;
       const { data: adminProfile } = await supabaseAdmin
         .from('profiles')
         .select('role, dept_id')
@@ -1528,12 +1549,18 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
     try {
       const { userId } = req.params;
 
-      // Check admin status of requester
-      const adminId = req.headers['x-user-id'] as string;
-      if (!adminId) {
-         return res.status(401).json({ error: 'Unauthorized.' });
+      // Check admin status of requester via JWT
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      const token = authHeader.split(' ')[1];
+      const { data: { user: adminUser }, error: verifyError } = await supabaseAdmin.auth.getUser(token);
+      if (verifyError || !adminUser) {
+        return res.status(401).json({ error: 'Invalid token' });
       }
       
+      const adminId = adminUser.id;
       const { data: adminProfile } = await supabaseAdmin
         .from('profiles')
         .select('role, dept_id')

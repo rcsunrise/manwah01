@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { X, Save, Undo2, MousePointer2, Sparkles } from './IconsNew';
-import { MaskRect, MaskStroke } from '../types';
+import { MaskRect, MaskStroke, Point } from '../types';
 import { Eraser, Square, PenTool } from 'lucide-react';
 
 interface ProductChannelMaskProps {

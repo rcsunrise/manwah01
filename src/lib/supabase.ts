@@ -4,19 +4,9 @@ const safeProcessEnv = typeof process !== 'undefined' ? process.env : {} as Reco
 
 const isPlaceholder = (val: string | undefined) => !val || val.includes('在这里填入') || val.includes('placeholder');
 
-// Vite 必须使用 import.meta.env 才能在浏览器端读取变量
-const supabaseUrl = 
-  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_URL) || 
-  safeProcessEnv.VITE_SUPABASE_URL || 
-  safeProcessEnv.SUPABASE_URL || 
-  '';
-
-const supabaseAnonKey = 
-  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_ANON_KEY) || 
-  safeProcessEnv.VITE_SUPABASE_ANON_KEY || 
-  safeProcessEnv.SUPABASE_ANON_KEY || 
-  '';
-
+// Use process.env directly. Vite will statically replace these thanks to the define config in vite.config.ts
+const supabaseUrl = safeProcessEnv.VITE_SUPABASE_URL || safeProcessEnv.SUPABASE_URL || '';
+const supabaseAnonKey = safeProcessEnv.VITE_SUPABASE_ANON_KEY || safeProcessEnv.SUPABASE_ANON_KEY || '';
 const supabaseServiceKey = safeProcessEnv.SUPABASE_SERVICE_ROLE_KEY || safeProcessEnv.SUPABASE_SERVICE_KEY || '';
 
 if (isPlaceholder(supabaseUrl) || isPlaceholder(supabaseAnonKey)) {

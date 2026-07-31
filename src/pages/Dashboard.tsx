@@ -10,7 +10,15 @@ import AdminNotepad from '../components/AdminNotepad';
 import AdminHeader from '../components/AdminHeader';
 import { BalanceDisplay } from '../components/BalanceDisplay';
 
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
+const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#64748B'];
+
+const cleanModelName = (rawModel?: string): string => {
+  if (!rawModel) return '未知模型';
+  return rawModel
+    .replace(/\s*\([^)]*耗时[^)]*\)/gi, '')
+    .replace(/\s*-\s*[VR]\s*$/gi, '')
+    .trim() || '未知模型';
+};
 
 export const fetchAdminStats = async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -141,7 +149,7 @@ export const fetchAdminStats = async () => {
         const modelCounts: Record<string, number> = {};
 
         chartLogs.forEach(log => {
-          const model = log.model || 'unknown';
+          const model = cleanModelName(log.model);
           const points = Number(log.tokens_used || 0);
           modelCounts[model] = (modelCounts[model] || 0) + (points / 10000);
 
@@ -153,9 +161,19 @@ export const fetchAdminStats = async () => {
         });
 
         hourlyData = Object.entries(hourCounts).map(([hour, tokens]) => ({ hour, tokens: Number(tokens.toFixed(2)) }));
-        modelData = Object.entries(modelCounts)
+        
+        const sortedModels = Object.entries(modelCounts)
           .map(([name, value]) => ({ name, value: Number(value.toFixed(2)) }))
+          .filter(item => item.value > 0)
           .sort((a, b) => b.value - a.value);
+
+        if (sortedModels.length > 5) {
+          const top5 = sortedModels.slice(0, 5);
+          const others = sortedModels.slice(5).reduce((acc, curr) => acc + curr.value, 0);
+          modelData = [...top5, { name: '其他', value: Number(others.toFixed(2)) }];
+        } else {
+          modelData = sortedModels;
+        }
       } else {
         const todayStr = new Date().toISOString().split('T')[0];
         const hourlyMap: Record<string, number> = {};
@@ -172,15 +190,24 @@ export const fetchAdminStats = async () => {
           }
           
           const cost = Number(log.tokens_used || 0) / 10000;
-          if (log.model) modelMap[log.model] = (modelMap[log.model] || 0) + cost;
+          const model = cleanModelName(log.model);
+          modelMap[model] = (modelMap[model] || 0) + cost;
         });
 
         hourlyData = Object.keys(hourlyMap).map(k => ({ hour: k, count: hourlyMap[k] }));
 
-        modelData = Object.keys(modelMap)
+        const sortedModels = Object.keys(modelMap)
           .filter(k => modelMap[k] > 0)
           .map(k => ({ name: k, value: Number(modelMap[k].toFixed(2)) }))
           .sort((a, b) => b.value - a.value);
+
+        if (sortedModels.length > 5) {
+          const top5 = sortedModels.slice(0, 5);
+          const others = sortedModels.slice(5).reduce((acc, curr) => acc + curr.value, 0);
+          modelData = [...top5, { name: '其他', value: Number(others.toFixed(2)) }];
+        } else {
+          modelData = sortedModels;
+        }
 
         // Fetch accurate Top 5 Users from profiles table
         let topUsersQuery = supabase.from('profiles').select('employee_id, username, quota_used').order('quota_used', { ascending: false }).limit(5);
@@ -547,7 +574,7 @@ export default function Dashboard() {
           </div>
 
           {/* Model Distribution */}
-          <div className="bg-white p-6 rounded-2xl shadow-[0_2px_10px_rgba(0,0,0,0.03)] border border-gray-100">
+          <div className="bg-white p-6 rounded-2xl shadow-[0_2px_10px_rgba(0,0,0,0.03)] border border-gray-100 overflow-hidden flex flex-col justify-between">
              <h3 className="font-bold text-gray-800 text-sm mb-4">
                 {(isAdmin || isDeptAdmin) ? "各模型消费分布 (USD)" : "模型使用分布 (W 点数)"}
              </h3>
@@ -559,12 +586,12 @@ export default function Dashboard() {
                          <Pie
                            data={modelData}
                            cx="50%"
-                           cy="50%"
-                           innerRadius={60}
-                           outerRadius={90}
-                           paddingAngle={5}
+                           cy="45%"
+                           innerRadius={55}
+                           outerRadius={85}
+                           paddingAngle={4}
                            dataKey="value"
-                           label={({ name, percent }) => percent > 0.05 ? `${(percent * 100).toFixed(0)}%` : ""}
+                           label={({ percent }) => percent > 0.05 ? `${(percent * 100).toFixed(0)}%` : ""}
                          >
                            {modelData.map((_entry, index) => (
                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
@@ -574,7 +601,13 @@ export default function Dashboard() {
                             formatter={(value: number) => [`$${value.toFixed(4)}`, 'Cost']}
                             contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
                          />
-                         <Legend verticalAlign="bottom" height={36} wrapperStyle={{ fontSize: '10px', paddingTop: '20px' }} />
+                         <Legend 
+                           verticalAlign="bottom" 
+                           align="center"
+                           iconType="circle"
+                           wrapperStyle={{ fontSize: '11px', paddingTop: '10px' }} 
+                           formatter={(value) => (value && value.length > 25 ? `${value.substring(0, 22)}...` : value)}
+                         />
                        </PieChart>
                      ) : (
                        <BarChart data={modelData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }} layout="vertical">
@@ -658,7 +691,7 @@ export default function Dashboard() {
                     <td className="py-3 px-2 font-bold text-stone-600 text-xs">
                       {log.profiles?.employee_id || log.profiles?.username || log.user_id?.substring(0,8) || 'System'}
                     </td>
-                    <td className="py-3 px-2 font-bold text-stone-800">{log.model}</td>
+                    <td className="py-3 px-2 font-bold text-stone-800 max-w-[280px] truncate" title={log.model}>{log.model}</td>
                     <td className="py-3 px-2">
                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${log.model_res === '4K' ? 'bg-purple-100 text-purple-700' : 'bg-stone-100 text-stone-600'}`}>
                           {log.model_res || '-'}
