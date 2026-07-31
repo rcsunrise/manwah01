@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MANWAH | AI 国内商品企划中心</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:wght@400;600&display=swap" rel="stylesheet">
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brand: {
+                charcoal: '#5D5955', // Further softened for lower contrast
+                gold: '#B9935A',     
+                goldLight: '#E2D1B3',
+                cream: '#FBFAF8',    // Lighter, more airy background
+                beige: '#F7F4F0',    
+                taupe: '#EBE7E0',    
+              },
+              primary: '#B9935A', 
+              secondary: '#E2D1B3',
+              warm: '#FBFAF8',
+            },
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              serif: ['Playfair Display', 'serif'],
+            },
+            backgroundImage: {
+              'gold-gradient': 'linear-gradient(135deg, #B9935A 0%, #E2D1B3 100%)',
+            },
+            animation: {
+              'slide-up': 'slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+              'fade-in': 'fadeIn 0.5s ease-out',
+            },
+            keyframes: {
+              slideUp: {
+                '0%': { transform: 'translate(-50%, 100%) scale(0.9)', opacity: '0' },
+                '100%': { transform: 'translate(-50%, 0) scale(1)', opacity: '1' },
+              },
+              fadeIn: {
+                '0%': { opacity: '0' },
+                '100%': { opacity: '1' },
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      body {
+        font-family: 'Inter', sans-serif;
+        background-color: #FBFAF8;
+        color: #5D5955;
+      }
+      ::-webkit-scrollbar {
+        width: 4px;
+        height: 4px;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #E2D1B3; 
+        border-radius: 10px;
+      }
+      .premium-shadow {
+        box-shadow: 0 4px 20px -5px rgba(185, 147, 90, 0.1);
+      }
+      .sidebar-section {
+        background: #FFFFFF;
+        border: 1px solid #EBE7E0;
+        border-radius: 1.25rem;
+        padding: 1.5rem;
+      }
+      textarea:focus {
+        outline: none;
+        border-color: #B9935A;
+      }
+      @keyframes progress {
+        0% { left: -33%; }
+        100% { left: 100%; }
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>

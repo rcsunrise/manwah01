@@ -1,0 +1,406 @@
+Starting block at 1146. Initial depth 0.
+Line 1146: opens=0, closes=0, depth=0 | {!isPromptCollapsed && (
+Line 1147: opens=1, closes=0, depth=1 | <div className="mt-6 space-y-4">
+Line 1148: opens=1, closes=0, depth=2 | <div className="flex items-center justify-end gap-1 mb-2">
+Line 1149: opens=1, closes=0, depth=3 | <div className="flex items-center px-1">
+Line 1150: opens=0, closes=0, depth=3 | <button
+Line 1151: opens=0, closes=0, depth=3 | onClick={() => setShowDimensionControls(!showDimensionControls)}
+Line 1152: opens=0, closes=0, depth=3 | className={`w-5 h-2.5 rounded-full transition-colors relative shrink-0 ${showDimensionControls ? 'bg-brand-gold' : 'bg-stone-300'}`}
+Line 1153: opens=0, closes=0, depth=3 | title="尺寸对照"
+Line 1154: opens=0, closes=0, depth=3 | >
+Line 1155: opens=1, closes=0, depth=4 | <div className={`w-1.5 h-1.5 bg-white rounded-full absolute top-0.5 transition-transform ${showDimensionControls ? 'translate-x-3' : 'translate-x-0.5'}`} />
+Line 1156: opens=0, closes=0, depth=4 | </button>
+Line 1157: opens=0, closes=1, depth=3 | </div>
+Line 1158: opens=0, closes=0, depth=3 | <button
+Line 1159: opens=0, closes=0, depth=3 | onClick={() => setIsPromptExpanded(!isPromptExpanded)}
+Line 1160: opens=0, closes=0, depth=3 | className="p-1 text-stone-400 hover:text-brand-gold hover:bg-brand-beige rounded-full transition-colors"
+Line 1161: opens=0, closes=0, depth=3 | title={isPromptExpanded ? "全屏开窗" : "开窗"}
+Line 1162: opens=0, closes=0, depth=3 | >
+Line 1163: opens=0, closes=0, depth=3 | <Maximize2 className="w-3 h-3" />
+Line 1164: opens=0, closes=0, depth=3 | </button>
+Line 1165: opens=1, closes=0, depth=4 | <div className="flex bg-brand-beige rounded-md p-0.5">
+Line 1166: opens=0, closes=0, depth=4 | <button
+Line 1167: opens=0, closes=0, depth=4 | onClick={() => setPromptMode('auto')}
+Line 1168: opens=0, closes=0, depth=4 | className={`px-1.5 py-0.5 text-[9px] font-bold rounded-sm transition-all ${promptMode === 'auto' ? 'bg-white text-brand-charcoal shadow-sm' : 'text-stone-400'}`}
+Line 1169: opens=0, closes=0, depth=4 | >
+Line 1170: opens=0, closes=0, depth=4 | 自动
+Line 1171: opens=0, closes=0, depth=4 | </button>
+Line 1172: opens=0, closes=0, depth=4 | <button
+Line 1173: opens=0, closes=0, depth=4 | onClick={() => setPromptMode('manual')}
+Line 1174: opens=0, closes=0, depth=4 | className={`px-1.5 py-0.5 text-[9px] font-bold rounded-sm transition-all ${promptMode === 'manual' ? 'bg-white text-brand-charcoal shadow-sm' : 'text-stone-400'}`}
+Line 1175: opens=0, closes=0, depth=4 | >
+Line 1176: opens=0, closes=0, depth=4 | 手动
+Line 1177: opens=0, closes=0, depth=4 | </button>
+Line 1178: opens=0, closes=1, depth=3 | </div>
+Line 1179: opens=0, closes=0, depth=3 | <button onClick={() => setShowLibrary(true)} className="p-1 text-brand-gold hover:bg-brand-beige rounded-full transition-colors" title="指令预设库"><BookOpen className="w-3 h-3" /></button>
+Line 1180: opens=0, closes=1, depth=2 | </div>
+Line 1181: opens=0, closes=0, depth=2 | 
+Line 1182: opens=1, closes=0, depth=3 | <div className={`relative transition-all duration-300 ${isPromptExpanded ? 'fixed inset-0 z-50 bg-white/95 backdrop-blur-md p-10 flex flex-col justify-center' : ''}`}>
+Line 1183: opens=0, closes=0, depth=3 | {isPromptExpanded && (
+Line 1184: opens=0, closes=0, depth=3 | <button
+Line 1185: opens=0, closes=0, depth=3 | onClick={() => setIsPromptExpanded(false)}
+Line 1186: opens=0, closes=0, depth=3 | className="absolute top-8 right-8 p-3 bg-brand-beige rounded-full hover:bg-brand-gold hover:text-white transition-colors"
+Line 1187: opens=0, closes=0, depth=3 | >
+Line 1188: opens=0, closes=0, depth=3 | <Minimize2 className="w-6 h-6" />
+Line 1189: opens=0, closes=0, depth=3 | </button>
+Line 1190: opens=0, closes=0, depth=3 | )}
+Line 1191: opens=0, closes=0, depth=3 | 
+Line 1192: opens=0, closes=0, depth=3 | {/* New Controls for V4.1 Prompt Engine */}
+Line 1193: opens=0, closes=0, depth=3 | {showDimensionControls && (
+Line 1194: opens=1, closes=0, depth=4 | <div className="flex flex-col gap-4 mb-4 bg-stone-50/80 p-4 rounded-2xl border border-stone-200">
+Line 1195: opens=1, closes=0, depth=5 | <div className="flex items-center justify-between">
+Line 1196: opens=1, closes=0, depth=6 | <div className="flex items-center gap-2">
+Line 1197: opens=0, closes=0, depth=6 | <label className="text-xs font-bold text-stone-500">Seats:</label>
+Line 1198: opens=0, closes=0, depth=6 | <input type="number" value={seatCount} onChange={e => setSeatCount(Number(e.target.value))} className="w-12 p-1.5 text-xs border border-stone-200 rounded-lg text-center focus:ring-1 focus:ring-brand-gold outline-none bg-white shadow-sm" />
+Line 1199: opens=0, closes=1, depth=5 | </div>
+Line 1200: opens=0, closes=1, depth=4 | </div>
+Line 1201: opens=1, closes=0, depth=5 | <div className="flex items-center justify-between mt-2">
+Line 1202: opens=0, closes=0, depth=5 | <label className="flex items-center gap-2 cursor-pointer group" onClick={() => setIsRatioLocked(!isRatioLocked)}>
+Line 1203: opens=1, closes=0, depth=6 | <div className={`w-8 h-4 rounded-full transition-colors relative ${isRatioLocked ? 'bg-brand-gold' : 'bg-stone-300'}`}>
+Line 1204: opens=1, closes=0, depth=7 | <div className={`w-3 h-3 bg-white rounded-full absolute top-0.5 transition-transform ${isRatioLocked ? 'translate-x-4' : 'translate-x-0.5'}`} />
+Line 1205: opens=0, closes=1, depth=6 | </div>
+Line 1206: opens=0, closes=0, depth=6 | <span className="text-[10px] font-bold text-stone-500 group-hover:text-brand-gold transition-colors">比例关联 (Ratio Lock)</span>
+Line 1207: opens=0, closes=0, depth=6 | </label>
+Line 1208: opens=0, closes=1, depth=5 | </div>
+Line 1209: opens=1, closes=0, depth=6 | <div className="grid grid-cols-3 gap-2">
+Line 1210: opens=1, closes=0, depth=7 | <div className="flex items-center gap-1.5">
+Line 1211: opens=0, closes=0, depth=7 | <label className="text-[10px] font-bold text-stone-500 whitespace-nowrap">W (mm):</label>
+Line 1212: opens=0, closes=0, depth=7 | <input type="number" value={dimensions.width} onChange={e => handleDimensionChange('width', Number(e.target.value))} className="w-full min-w-0 p-1.5 text-xs border border-stone-200 rounded-lg text-center focus:ring-1 focus:ring-brand-gold outline-none bg-white shadow-sm" />
+Line 1213: opens=0, closes=1, depth=6 | </div>
+Line 1214: opens=1, closes=0, depth=7 | <div className="flex items-center gap-1.5 relative">
+Line 1215: opens=0, closes=0, depth=7 | <label className={`text-[10px] font-bold whitespace-nowrap ${isDepthDeviating ? 'text-red-500' : 'text-stone-500'}`}>D (mm):</label>
+Line 1216: opens=0, closes=0, depth=7 | <input
+Line 1217: opens=0, closes=0, depth=7 | type="number"
+Line 1218: opens=0, closes=0, depth=7 | value={dimensions.depth}
+Line 1219: opens=0, closes=0, depth=7 | onChange={e => handleDimensionChange('depth', Number(e.target.value))}
+Line 1220: opens=0, closes=0, depth=7 | disabled={isRatioLocked || !!aepData}
+Line 1221: opens=0, closes=0, depth=7 | className={`w-full min-w-0 p-1.5 text-xs border rounded-lg text-center focus:ring-1 focus:ring-brand-gold outline-none shadow-sm transition-colors ${
+Line 1222: opens=0, closes=0, depth=7 | (isRatioLocked || !!aepData) ? 'bg-stone-100 text-stone-400 cursor-not-allowed border-stone-200' :
+Line 1223: opens=0, closes=0, depth=7 | isDepthDeviating ? 'bg-red-50 text-red-700 border-red-300 focus:ring-red-500' : 'bg-white border-stone-200'
+Line 1224: opens=0, closes=0, depth=7 | }`}
+Line 1225: opens=0, closes=0, depth=7 | />
+Line 1226: opens=0, closes=0, depth=7 | {isDepthDeviating && !isRatioLocked && !aepData && (
+Line 1227: opens=1, closes=0, depth=8 | <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-red-500 text-white text-[9px] px-2 py-1 rounded shadow-lg whitespace-nowrap z-10 animate-fade-in">
+Line 1228: opens=0, closes=0, depth=8 | 偏离预估比例 &gt;20%
+Line 1229: opens=1, closes=1, depth=8 | <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-red-500 rotate-45"></div>
+Line 1230: opens=0, closes=1, depth=7 | </div>
+Line 1231: opens=0, closes=0, depth=7 | )}
+Line 1232: opens=0, closes=1, depth=6 | </div>
+Line 1233: opens=1, closes=0, depth=7 | <div className="flex items-center gap-1.5">
+Line 1234: opens=0, closes=0, depth=7 | <label className="text-[10px] font-bold text-stone-500 whitespace-nowrap">H (mm):</label>
+Line 1235: opens=0, closes=0, depth=7 | <input type="number" value={dimensions.height} onChange={e => handleDimensionChange('height', Number(e.target.value))} disabled={isRatioLocked || !!aepData} className={`w-full min-w-0 p-1.5 text-xs border border-stone-200 rounded-lg text-center focus:ring-1 focus:ring-brand-gold outline-none shadow-sm ${(isRatioLocked || !!aepData) ? 'bg-stone-100 text-stone-400 cursor-not-allowed' : 'bg-white'}`} />
+Line 1236: opens=0, closes=1, depth=6 | </div>
+Line 1237: opens=0, closes=1, depth=5 | </div>
+Line 1238: opens=0, closes=0, depth=5 | {aepData?.dimensionEstimate && (
+Line 1239: opens=1, closes=0, depth=6 | <div className="mt-2 flex items-center justify-between bg-stone-50 p-2 rounded-lg border border-stone-100">
+Line 1240: opens=1, closes=0, depth=7 | <div className="flex items-center gap-2">
+Line 1241: opens=0, closes=0, depth=7 | <Brain className="w-3 h-3 text-purple-500" />
+Line 1242: opens=0, closes=0, depth=7 | <span className="text-[9px] text-stone-500">
+Line 1243: opens=0, closes=0, depth=7 | AI 预估 ({aepData.dimensionEstimate.category}):
+Line 1244: opens=0, closes=0, depth=7 | <button onClick={() => handleDimensionChange('width', aepData.dimensionEstimate!.estW)} className="font-mono font-bold text-brand-gold hover:underline ml-1">{aepData.dimensionEstimate.estW}</button> ×
+Line 1245: opens=0, closes=0, depth=7 | <span className="font-mono font-bold">{aepData.dimensionEstimate.estD}</span> ×
+Line 1246: opens=0, closes=0, depth=7 | <span className="font-mono font-bold">{aepData.dimensionEstimate.estH}</span>
+Line 1247: opens=0, closes=0, depth=7 | </span>
+Line 1248: opens=0, closes=1, depth=6 | </div>
+Line 1249: opens=0, closes=0, depth=6 | <button
+Line 1250: opens=0, closes=0, depth=6 | onClick={() => {
+Line 1251: opens=0, closes=0, depth=6 | setDimensions({
+Line 1252: opens=0, closes=0, depth=6 | width: aepData.dimensionEstimate!.estW,
+Line 1253: opens=0, closes=0, depth=6 | depth: aepData.dimensionEstimate!.estD,
+Line 1254: opens=0, closes=0, depth=6 | height: aepData.dimensionEstimate!.estH
+Line 1255: opens=0, closes=0, depth=6 | });
+Line 1256: opens=0, closes=0, depth=6 | if (aepData.dimensionEstimate!.confidence > 0.8) setIsRatioLocked(true);
+Line 1257: opens=0, closes=0, depth=6 | }}
+Line 1258: opens=0, closes=0, depth=6 | className="text-[9px] px-2 py-1 bg-white border border-stone-200 rounded text-brand-gold font-bold hover:bg-brand-gold hover:text-white transition-colors"
+Line 1259: opens=0, closes=0, depth=6 | >
+Line 1260: opens=0, closes=0, depth=6 | 同步
+Line 1261: opens=0, closes=0, depth=6 | </button>
+Line 1262: opens=0, closes=1, depth=5 | </div>
+Line 1263: opens=0, closes=0, depth=5 | )}
+Line 1264: opens=1, closes=0, depth=6 | <div className="text-[10px] text-stone-400 font-medium mt-1">
+Line 1265: opens=0, closes=0, depth=6 | * 尺寸将以毫米 (mm) 为单位直接映射到提示词中，以确保精确的比例控制。
+Line 1266: opens=0, closes=1, depth=5 | </div>
+Line 1267: opens=0, closes=0, depth=5 | 
+Line 1268: opens=0, closes=0, depth=5 | {/* SVG Previewer */}
+Line 1269: opens=0, closes=0, depth=5 | {(() => {
+Line 1270: opens=0, closes=0, depth=5 | const latestTask = generationHistory.filter(t => t.result?.imageUrl).pop();
+Line 1271: opens=0, closes=0, depth=5 | return (
+Line 1272: opens=0, closes=0, depth=5 | <SvgPreviewer
+Line 1273: opens=0, closes=0, depth=5 | dimensions={dimensions}
+Line 1274: opens=0, closes=0, depth=5 | imageUrl={latestTask?.result?.imageUrl}
+Line 1275: opens=0, closes=0, depth=5 | measurements={latestTask?.measurements}
+Line 1276: opens=0, closes=0, depth=5 | labelAlignmentMode={latestTask?.labelAlignmentMode}
+Line 1277: opens=0, closes=0, depth=5 | onUpdateDimensions={(d, h) => setDimensions(prev => ({ ...prev, depth: d, height: h }))}
+Line 1278: opens=0, closes=0, depth=5 | />
+Line 1279: opens=0, closes=0, depth=5 | );
+Line 1280: opens=0, closes=0, depth=5 | })()}
+Line 1281: opens=0, closes=1, depth=4 | </div>
+Line 1282: opens=0, closes=0, depth=4 | )}
+Line 1283: opens=0, closes=0, depth=4 | 
+Line 1284: opens=0, closes=0, depth=4 | {promptMode === 'auto' && aepData ? (
+Line 1285: opens=1, closes=0, depth=5 | <div className={`w-full ${isPromptExpanded ? 'h-[80vh]' : 'h-40'} p-4 bg-purple-50/50 border border-purple-100 rounded-[1.5rem] overflow-y-auto custom-scrollbar transition-all duration-300 relative resize-y`}>
+Line 1286: opens=1, closes=0, depth=6 | <div className="flex flex-wrap gap-2 mb-3">
+Line 1287: opens=0, closes=0, depth=6 | {aepData.keywords.map((tag, i) => (
+Line 1288: opens=0, closes=0, depth=6 | <span key={i} className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-purple-100 rounded-md text-[10px] font-medium text-purple-700 shadow-sm">
+Line 1289: opens=0, closes=0, depth=6 | <Tag size={10} /> {tag}
+Line 1290: opens=0, closes=0, depth=6 | </span>
+Line 1291: opens=0, closes=0, depth=6 | ))}
+Line 1292: opens=0, closes=1, depth=5 | </div>
+Line 1293: opens=0, closes=0, depth=5 | <p className={`text-brand-charcoal leading-relaxed opacity-80 ${isPromptExpanded ? 'text-lg' : 'text-xs'}`}>{prompt}</p>
+Line 1294: opens=0, closes=0, depth=5 | {isRewriting && (
+Line 1295: opens=1, closes=0, depth=6 | <div className="absolute inset-0 bg-white/60 backdrop-blur-[1px] flex items-center justify-center rounded-[1.5rem]">
+Line 1296: opens=1, closes=0, depth=7 | <div className="flex items-center gap-2 text-purple-600 text-xs font-bold">
+Line 1297: opens=0, closes=0, depth=7 | <Loader2 className="w-4 h-4 animate-spin" />
+Line 1298: opens=0, closes=0, depth=7 | Syncing AEP...
+Line 1299: opens=0, closes=1, depth=6 | </div>
+Line 1300: opens=0, closes=1, depth=5 | </div>
+Line 1301: opens=0, closes=0, depth=5 | )}
+Line 1302: opens=0, closes=1, depth=4 | </div>
+Line 1303: opens=0, closes=0, depth=4 | ) : (
+Line 1304: opens=1, closes=0, depth=5 | <div className="relative w-full">
+Line 1305: opens=0, closes=0, depth=5 | <textarea
+Line 1306: opens=0, closes=0, depth=5 | value={prompt} onChange={e => setPrompt(e.target.value)}
+Line 1307: opens=0, closes=0, depth=5 | className={`w-full ${isPromptExpanded ? 'h-[80vh] text-lg p-10' : 'h-24 md:h-40 p-3 md:p-5 text-xs'} bg-brand-beige/40 border border-brand-taupe rounded-[1.5rem] focus:ring-1 focus:ring-brand-gold transition-all resize-y font-medium leading-relaxed`}
+Line 1308: opens=0, closes=0, depth=5 | placeholder="请输入详细的设计逻辑与材质要求..."
+Line 1309: opens=0, closes=0, depth=5 | />
+Line 1310: opens=0, closes=1, depth=4 | </div>
+Line 1311: opens=0, closes=0, depth=4 | )}
+Line 1312: opens=0, closes=0, depth=4 | 
+Line 1313: opens=0, closes=0, depth=4 | {/* Optimized Button Position - Outside Text Area */}
+Line 1314: opens=0, closes=0, depth=4 | {!isPromptExpanded && (
+Line 1315: opens=1, closes=0, depth=5 | <div className="flex justify-end gap-2 mt-2">
+Line 1316: opens=0, closes=0, depth=5 | <button
+Line 1317: opens=0, closes=0, depth=5 | onClick={() => setShowPromptBuilder(true)}
+Line 1318: opens=0, closes=0, depth=5 | className="p-2 bg-white border border-brand-taupe rounded-lg text-stone-400 hover:text-brand-gold hover:border-brand-gold transition-colors"
+Line 1319: opens=0, closes=0, depth=5 | title="Prompt Builder"
+Line 1320: opens=0, closes=0, depth=5 | >
+Line 1321: opens=0, closes=0, depth=5 | <Wand2 className="w-4 h-4" />
+Line 1322: opens=0, closes=0, depth=5 | </button>
+Line 1323: opens=0, closes=0, depth=5 | <button
+Line 1324: opens=0, closes=0, depth=5 | onClick={() => setPrompt('')}
+Line 1325: opens=0, closes=0, depth=5 | className="p-2 bg-white border border-brand-taupe rounded-lg text-stone-400 hover:text-red-400 hover:border-red-200 transition-colors"
+Line 1326: opens=0, closes=0, depth=5 | title="清除当前指令"
+Line 1327: opens=0, closes=0, depth=5 | >
+Line 1328: opens=0, closes=0, depth=5 | <Trash2 className="w-4 h-4" />
+Line 1329: opens=0, closes=0, depth=5 | </button>
+Line 1330: opens=0, closes=0, depth=5 | <button
+Line 1331: opens=0, closes=0, depth=5 | onClick={handleSaveCurrentToLibrary}
+Line 1332: opens=0, closes=0, depth=5 | className="p-2 bg-white border border-brand-taupe rounded-lg text-stone-400 hover:text-brand-gold hover:border-brand-gold transition-colors"
+Line 1333: opens=0, closes=0, depth=5 | title="保存为预设 (上限20组)"
+Line 1334: opens=0, closes=0, depth=5 | >
+Line 1335: opens=0, closes=0, depth=5 | <Save className="w-4 h-4" />
+Line 1336: opens=0, closes=0, depth=5 | </button>
+Line 1337: opens=0, closes=0, depth=5 | <button
+Line 1338: opens=0, closes=0, depth=5 | onClick={handleRewritePrompt}
+Line 1339: opens=0, closes=0, depth=5 | className="p-2 bg-white border border-brand-taupe rounded-lg text-stone-400 hover:text-brand-gold hover:border-brand-gold transition-colors"
+Line 1340: opens=0, closes=0, depth=5 | title="智能翻译/重写"
+Line 1341: opens=0, closes=0, depth=5 | >
+Line 1342: opens=0, closes=0, depth=5 | <Languages className="w-4 h-4" />
+Line 1343: opens=0, closes=0, depth=5 | </button>
+Line 1344: opens=0, closes=1, depth=4 | </div>
+Line 1345: opens=0, closes=0, depth=4 | )}
+Line 1346: opens=0, closes=0, depth=4 | 
+Line 1347: opens=0, closes=0, depth=4 | {/* Expanded Mode Buttons */}
+Line 1348: opens=0, closes=0, depth=4 | {isPromptExpanded && !promptMode.includes('auto') && (
+Line 1349: opens=1, closes=0, depth=5 | <div className="absolute bottom-10 right-10 flex gap-4">
+Line 1350: opens=0, closes=0, depth=5 | <button
+Line 1351: opens=0, closes=0, depth=5 | onClick={() => setShowPromptBuilder(true)}
+Line 1352: opens=0, closes=0, depth=5 | className="p-4 bg-white border border-brand-taupe rounded-full text-stone-400 hover:text-brand-gold hover:border-brand-gold transition-colors shadow-lg"
+Line 1353: opens=0, closes=0, depth=5 | title="Prompt Builder"
+Line 1354: opens=0, closes=0, depth=5 | >
+Line 1355: opens=0, closes=0, depth=5 | <Wand2 className="w-6 h-6" />
+Line 1356: opens=0, closes=0, depth=5 | </button>
+Line 1357: opens=0, closes=0, depth=5 | <button
+Line 1358: opens=0, closes=0, depth=5 | onClick={() => setPrompt('')}
+Line 1359: opens=0, closes=0, depth=5 | className="p-4 bg-white border border-brand-taupe rounded-full text-stone-400 hover:text-red-400 hover:border-red-200 transition-colors shadow-lg"
+Line 1360: opens=0, closes=0, depth=5 | title="清除当前指令"
+Line 1361: opens=0, closes=0, depth=5 | >
+Line 1362: opens=0, closes=0, depth=5 | <Trash2 className="w-6 h-6" />
+Line 1363: opens=0, closes=0, depth=5 | </button>
+Line 1364: opens=0, closes=0, depth=5 | <button
+Line 1365: opens=0, closes=0, depth=5 | onClick={handleSaveCurrentToLibrary}
+Line 1366: opens=0, closes=0, depth=5 | className="p-4 bg-white border border-brand-taupe rounded-full text-stone-400 hover:text-brand-gold hover:border-brand-gold transition-colors shadow-lg"
+Line 1367: opens=0, closes=0, depth=5 | title="保存为预设"
+Line 1368: opens=0, closes=0, depth=5 | >
+Line 1369: opens=0, closes=0, depth=5 | <Save className="w-6 h-6" />
+Line 1370: opens=0, closes=0, depth=5 | </button>
+Line 1371: opens=0, closes=0, depth=5 | <button
+Line 1372: opens=0, closes=0, depth=5 | onClick={handleRewritePrompt}
+Line 1373: opens=0, closes=0, depth=5 | className="p-4 bg-white border border-brand-taupe rounded-full text-stone-400 hover:text-brand-gold hover:border-brand-gold transition-colors shadow-lg"
+Line 1374: opens=0, closes=0, depth=5 | title="智能翻译/重写"
+Line 1375: opens=0, closes=0, depth=5 | >
+Line 1376: opens=0, closes=0, depth=5 | <Languages className="w-6 h-6" />
+Line 1377: opens=0, closes=0, depth=5 | </button>
+Line 1378: opens=0, closes=1, depth=4 | </div>
+Line 1379: opens=0, closes=0, depth=4 | )}
+Line 1380: opens=0, closes=0, depth=4 | 
+Line 1381: opens=0, closes=0, depth=4 | {/* 图像分析结果节点窗口 */}
+Line 1382: opens=1, closes=0, depth=5 | <div className="mt-4 p-5 bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl">
+Line 1383: opens=1, closes=0, depth=6 | <div className="flex items-center justify-between mb-3 text-[#1E293B]">
+Line 1384: opens=1, closes=0, depth=7 | <div className="flex items-center gap-2">
+Line 1385: opens=0, closes=0, depth=7 | <Wand2 className="w-4 h-4 text-[#3B82F6]" />
+Line 1386: opens=0, closes=0, depth=7 | <span className="text-sm font-bold text-[#1E293B]">录入图特征标准化描述</span>
+Line 1387: opens=0, closes=1, depth=6 | </div>
+Line 1388: opens=0, closes=0, depth=6 | <button
+Line 1389: opens=0, closes=0, depth=6 | onClick={handleSmartPrompt}
+Line 1390: opens=0, closes=0, depth=6 | disabled={isThinking}
+Line 1391: opens=0, closes=0, depth=6 | className="p-1.5 rounded-lg bg-white border border-[#E2E8F0] hover:bg-[#F1F5F9] text-[#64748B] transition-colors disabled:opacity-50 shadow-sm"
+Line 1392: opens=0, closes=0, depth=6 | title="手动刷新特征数据"
+Line 1393: opens=0, closes=0, depth=6 | >
+Line 1394: opens=0, closes=0, depth=6 | {isThinking ? <Loader2 className="w-4 h-4 animate-spin" /> : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21v-5h5"/></svg>}
+Line 1395: opens=0, closes=0, depth=6 | </button>
+Line 1396: opens=0, closes=1, depth=5 | </div>
+Line 1397: opens=0, closes=0, depth=5 | {imageAnalysisResult ? (
+Line 1398: opens=0, closes=0, depth=5 | <textarea
+Line 1399: opens=0, closes=0, depth=5 | value={imageAnalysisResult}
+Line 1400: opens=0, closes=0, depth=5 | onChange={(e) => setImageAnalysisResult(e.target.value)}
+Line 1401: opens=0, closes=0, depth=5 | className="w-full min-h-[80px] p-3 text-xs text-[#334155] font-medium whitespace-pre-wrap leading-relaxed bg-white/60 border border-[#E2E8F0] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#3B82F6] resize-y"
+Line 1402: opens=0, closes=0, depth=5 | />
+Line 1403: opens=0, closes=0, depth=5 | ) : (
+Line 1404: opens=0, closes=0, depth=5 | <p className="text-xs text-[#94A3B8] font-medium italic py-3 text-center">
+Line 1405: opens=0, closes=0, depth=5 | 点击右上角刷新图标，提取参考图特征标准化描述
+Line 1406: opens=0, closes=0, depth=5 | </p>
+Line 1407: opens=0, closes=0, depth=5 | )}
+Line 1408: opens=0, closes=1, depth=4 | </div>
+Line 1409: opens=0, closes=0, depth=4 | 
+Line 1410: opens=0, closes=0, depth=4 | {/* 局部修改示例提示便贴 */}
+Line 1411: opens=1, closes=0, depth=5 | <div className="mt-4 p-5 bg-[#FDFBF7] border border-[#E5E0D8]/60 rounded-2xl relative overflow-hidden">
+Line 1412: opens=1, closes=0, depth=6 | <div className="flex flex-col gap-2 relative z-10">
+Line 1413: opens=1, closes=0, depth=7 | <div className="flex items-center justify-between">
+Line 1414: opens=0, closes=0, depth=7 | <span className="text-sm font-bold text-[#44403C] flex items-center gap-2">
+Line 1415: opens=0, closes=0, depth=7 | <span className="w-5 h-5 flex items-center justify-center bg-[#FDE68A] text-[#B45309] rounded-full text-xs shadow-sm">
+Line 1416: opens=0, closes=0, depth=7 | {imageAnalysisSuggestions && imageAnalysisSuggestions.length > 0 ? <Lightbulb className="w-3 h-3" /> : '!'}
+Line 1417: opens=0, closes=0, depth=7 | </span>
+Line 1418: opens=0, closes=0, depth=7 | {imageAnalysisSuggestions && imageAnalysisSuggestions.length > 0 ? '基于现状的迭代建议' : '从描述到迭代：局部修改指令参考'}
+Line 1419: opens=0, closes=0, depth=7 | </span>
+Line 1420: opens=1, closes=0, depth=8 | <div className="flex items-center gap-2">
+Line 1421: opens=0, closes=0, depth=8 | {selectedSuggestionIndices.length > 0 && (
+Line 1422: opens=0, closes=0, depth=8 | <button
+Line 1423: opens=0, closes=0, depth=8 | onClick={handleSyncSuggestions}
+Line 1424: opens=0, closes=0, depth=8 | className="flex items-center gap-1.5 px-3 py-1.5 bg-[#B28C5A] text-white text-[10px] font-bold rounded-full shadow-lg shadow-[#B28C5A]/20 hover:bg-[#8B6B42] transition-all animate-fade-in"
+Line 1425: opens=0, closes=0, depth=8 | >
+Line 1426: opens=0, closes=0, depth=8 | <Save className="w-3 h-3" /> 同步至指令 ({selectedSuggestionIndices.length})
+Line 1427: opens=0, closes=0, depth=8 | </button>
+Line 1428: opens=0, closes=0, depth=8 | )}
+Line 1429: opens=0, closes=0, depth=8 | <button
+Line 1430: opens=0, closes=0, depth=8 | onClick={handleSmartPrompt}
+Line 1431: opens=0, closes=0, depth=8 | disabled={isThinking}
+Line 1432: opens=0, closes=0, depth=8 | className="p-1.5 rounded-lg bg-white border border-[#E5E0D8] hover:bg-[#F5F1EA] text-[#78716C] transition-colors disabled:opacity-50 shadow-sm"
+Line 1433: opens=0, closes=0, depth=8 | title="手动刷新迭代建议"
+Line 1434: opens=0, closes=0, depth=8 | >
+Line 1435: opens=0, closes=0, depth=8 | {isThinking ? <Loader2 className="w-4 h-4 animate-spin" /> : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21v-5h5"/></svg>}
+Line 1436: opens=0, closes=0, depth=8 | </button>
+Line 1437: opens=0, closes=1, depth=7 | </div>
+Line 1438: opens=0, closes=1, depth=6 | </div>
+Line 1439: opens=0, closes=0, depth=6 | <p className="text-xs text-[#78716C] mb-2 mt-1 leading-relaxed">
+Line 1440: opens=0, closes=0, depth=6 | {imageAnalysisSuggestions && imageAnalysisSuggestions.length > 0
+Line 1441: opens=0, closes=0, depth=6 | ? 'AI基你上传的产品图识别出的现状，提供的针对性局部修改灵感：'
+Line 1442: opens=0, closes=0, depth=6 | : '如果你想基于上传的图片进行修改，可以参考这种“特征+动词+目标”的公式：'
+Line 1443: opens=0, closes=0, depth=6 | }
+Line 1444: opens=0, closes=0, depth=6 | </p>
+Line 1445: opens=0, closes=0, depth=6 | 
+Line 1446: opens=0, closes=0, depth=6 | <details className="mt-1 cursor-pointer">
+Line 1447: opens=0, closes=0, depth=6 | <summary className="text-sm font-bold text-[#57534E] list-none flex items-center justify-between px-4 py-3 bg-white rounded-xl border border-[#E5E0D8] shadow-sm hover:bg-[#FAFAF9] transition-colors">
+Line 1448: opens=0, closes=0, depth=6 | <span className="flex items-center gap-2">💡 点击查看局部修改指令参考公式</span>
+Line 1449: opens=0, closes=0, depth=6 | <ChevronDown className="w-4 h-4 text-[#A8A29E] transition-transform details-arrow"/>
+Line 1450: opens=0, closes=0, depth=6 | </summary>
+Line 1451: opens=1, closes=0, depth=7 | <div className="overflow-x-auto custom-scrollbar mt-3">
+Line 1452: opens=0, closes=0, depth=7 | <table className="w-full text-left border-collapse min-w-[500px]">
+Line 1453: opens=0, closes=0, depth=7 | <thead>
+Line 1454: opens=0, closes=0, depth=7 | <tr className="border-b border-[#E5E0D8] pb-1">
+Line 1455: opens=0, closes=0, depth=7 | <th className="py-2 text-[11px] font-semibold text-[#78716C] w-8 text-center">
+Line 1456: opens=0, closes=0, depth=7 | {imageAnalysisSuggestions && imageAnalysisSuggestions.length > 0 && (
+Line 1457: opens=0, closes=0, depth=7 | <input
+Line 1458: opens=0, closes=0, depth=7 | type="checkbox"
+Line 1459: opens=0, closes=0, depth=7 | checked={selectedSuggestionIndices.length === imageAnalysisSuggestions.length && imageAnalysisSuggestions.length > 0}
+Line 1460: opens=0, closes=0, depth=7 | onChange={() => {
+Line 1461: opens=0, closes=0, depth=7 | if (selectedSuggestionIndices.length === imageAnalysisSuggestions.length) {
+Line 1462: opens=0, closes=0, depth=7 | setSelectedSuggestionIndices([]);
+Line 1463: opens=0, closes=0, depth=7 | } else {
+Line 1464: opens=0, closes=0, depth=7 | setSelectedSuggestionIndices(imageAnalysisSuggestions.map((_, i) => i));
+Line 1465: opens=0, closes=0, depth=7 | }
+Line 1466: opens=0, closes=0, depth=7 | }}
+Line 1467: opens=0, closes=0, depth=7 | className="w-4 h-4 text-[#B28C5A] rounded border-[#D6D3D1] focus:ring-[#B28C5A]"
+Line 1468: opens=0, closes=0, depth=7 | />
+Line 1469: opens=0, closes=0, depth=7 | )}
+Line 1470: opens=0, closes=0, depth=7 | </th>
+Line 1471: opens=0, closes=0, depth=7 | <th className="py-2 text-[11px] font-semibold text-[#78716C] w-20">修改部位</th>
+Line 1472: opens=0, closes=0, depth=7 | <th className="py-2 text-[11px] font-semibold text-[#78716C] w-32">原始描述 (As-is)</th>
+Line 1473: opens=0, closes=0, depth=7 | <th className="py-2 text-[11px] font-semibold text-[#78716C]">修改指令 (To-be)</th>
+Line 1474: opens=0, closes=0, depth=7 | <th className="py-2 text-[11px] font-semibold text-[#78716C] w-40">预期效果</th>
+Line 1475: opens=0, closes=0, depth=7 | </tr>
+Line 1476: opens=0, closes=0, depth=7 | </thead>
+Line 1477: opens=0, closes=0, depth=7 | <tbody className="text-[11px] text-[#57534E] divide-y divide-[#E5E0D8]/40">
+Line 1478: opens=0, closes=0, depth=7 | {(imageAnalysisSuggestions && imageAnalysisSuggestions.length > 0) ? (
+Line 1479: opens=0, closes=0, depth=7 | imageAnalysisSuggestions.map((suggestion, idx) => (
+Line 1480: opens=0, closes=0, depth=7 | <tr key={idx} className={`hover:bg-white/60 transition-colors cursor-pointer ${selectedSuggestionIndices.includes(idx) ? 'bg-[#B28C5A]/5' : ''}`} onClick={() => toggleSuggestion(idx)}>
+Line 1481: opens=0, closes=0, depth=7 | <td className="py-3 text-center" onClick={(e) => e.stopPropagation()}>
+Line 1482: opens=0, closes=0, depth=7 | <input
+Line 1483: opens=0, closes=0, depth=7 | type="checkbox"
+Line 1484: opens=0, closes=0, depth=7 | checked={selectedSuggestionIndices.includes(idx)}
+Line 1485: opens=0, closes=0, depth=7 | onChange={() => toggleSuggestion(idx)}
+Line 1486: opens=0, closes=0, depth=7 | className="w-4 h-4 text-[#B28C5A] rounded border-[#D6D3D1] focus:ring-[#B28C5A]"
+Line 1487: opens=0, closes=0, depth=7 | />
+Line 1488: opens=0, closes=0, depth=7 | </td>
+Line 1489: opens=0, closes=0, depth=7 | <td className="py-3 pr-2 font-medium text-[#44403C]">{highlightRedText(suggestion.part)}</td>
+Line 1490: opens=0, closes=0, depth=7 | <td className="py-3 pr-2 text-[#A8A29E]">{highlightRedText(suggestion.original)}</td>
+Line 1491: opens=0, closes=0, depth=7 | <td className="py-3 pr-2 font-medium text-[#B28C5A] leading-relaxed">{suggestion.modification}</td>
+Line 1492: opens=0, closes=0, depth=7 | <td className="py-3 text-[#78716C] leading-relaxed">{highlightRedText(suggestion.effect)}</td>
+Line 1493: opens=0, closes=0, depth=7 | </tr>
+Line 1494: opens=0, closes=0, depth=7 | ))
+Line 1495: opens=0, closes=0, depth=7 | ) : (
+Line 1496: opens=0, closes=0, depth=7 | <>
+Line 1497: opens=0, closes=0, depth=7 | <tr className="hover:bg-white/60 transition-colors">
+Line 1498: opens=0, closes=0, depth=7 | <td className="py-3 text-center"></td>
+Line 1499: opens=0, closes=0, depth=7 | <td className="py-3 pr-2 font-medium">靠背 (Backrest)</td>
+Line 1500: opens=0, closes=0, depth=7 | <td className="py-3 pr-2 text-[#A8A29E]">普通高度，直角边缘</td>
+Line 1501: opens=0, closes=0, depth=7 | <td className="py-3 pr-2 font-medium text-[#B28C5A]">改为高靠背设计，边缘使用大圆角过渡</td>
+Line 1502: opens=0, closes=0, depth=7 | <td className="py-3 text-[#78716C]">提升支撑感，视觉更柔和</td>
+Line 1503: opens=0, closes=0, depth=7 | </tr>
+Line 1504: opens=0, closes=0, depth=7 | <tr className="hover:bg-white/60 transition-colors">
+Line 1505: opens=0, closes=0, depth=7 | <td className="py-3 text-center"></td>
+Line 1506: opens=0, closes=0, depth=7 | <td className="py-3 pr-2 font-medium">扶手 (Armrest)</td>
+Line 1507: opens=0, closes=0, depth=7 | <td className="py-3 pr-2 text-[#A8A29E]">平直薄垫扶手</td>
+Line 1508: opens=0, closes=0, depth=7 | <td className="py-3 pr-2 font-medium text-[#B28C5A]">替换为饱满的圆弧外包扶手，增加明显褶皱细节</td>
+Line 1509: opens=0, closes=0, depth=7 | <td className="py-3 text-[#78716C]">增加体量感与松弛感</td>
+Line 1510: opens=0, closes=0, depth=7 | </tr>
+Line 1511: opens=0, closes=0, depth=7 | <tr className="hover:bg-white/60 transition-colors">
+Line 1512: opens=0, closes=0, depth=7 | <td className="py-3 text-center"></td>
+Line 1513: opens=0, closes=0, depth=7 | <td className="py-3 pr-2 font-medium">座垫 (Seat)</td>
+Line 1514: opens=0, closes=0, depth=7 | <td className="py-3 pr-2 text-[#A8A29E]">单层平整座垫</td>
+Line 1515: opens=0, closes=0, depth=7 | <td className="py-3 pr-2 font-medium text-[#B28C5A]">变更为双层厚垫设计，边缘增加拉点收缩工艺</td>
+Line 1516: opens=0, closes=0, depth=7 | <td className="py-3 text-[#78716C]">强化包裹感与工艺细节</td>
+Line 1517: opens=0, closes=0, depth=7 | </tr>
+Line 1518: opens=0, closes=0, depth=7 | </>
+Line 1519: opens=0, closes=0, depth=7 | )}
+Line 1520: opens=0, closes=0, depth=7 | </tbody>
+Line 1521: opens=0, closes=0, depth=7 | </table>
+Line 1522: opens=0, closes=1, depth=6 | </div>
+Line 1523: opens=0, closes=0, depth=6 | </details>
+Line 1524: opens=0, closes=1, depth=5 | </div>
+Line 1525: opens=0, closes=1, depth=4 | </div>
+Line 1526: opens=0, closes=0, depth=4 | 
+Line 1527: opens=1, closes=0, depth=5 | <div className="pt-4 border-t border-brand-taupe">
+Line 1528: opens=1, closes=0, depth=6 | <div className="flex gap-3 items-center">
+Line 1529: opens=0, closes=0, depth=6 | <input type="text" value={assistantRole} onChange={e => setAssistantRole(e.target.value)} placeholder="设计师身份" className="flex-1 p-3 text-xs bg-brand-beige/40 border border-brand-taupe rounded-xl outline-none" />
+Line 1530: opens=0, closes=0, depth=6 | <label className="flex items-center gap-2 text-xs font-bold text-stone-500 cursor-pointer">
+Line 1531: opens=0, closes=0, depth=6 | <input
+Line 1532: opens=0, closes=0, depth=6 | type="checkbox"
+Line 1533: opens=0, closes=0, depth=6 | checked={isDeepThinking}
+Line 1534: opens=0, closes=0, depth=6 | onChange={(e) => setIsDeepThinking(e.target.checked)}
+Line 1535: opens=0, closes=0, depth=6 | className="w-4 h-4 text-brand-gold rounded border-stone-300 focus:ring-brand-gold"
+Line 1536: opens=0, closes=0, depth=6 | />
+Line 1537: opens=0, closes=0, depth=6 | 深度思考
+Line 1538: opens=0, closes=0, depth=6 | </label>
+Line 1539: opens=0, closes=0, depth=6 | <button onClick={handleSmartPrompt} className="px-6 py-3 bg-brand-charcoal text-white rounded-xl text-xs font-bold shadow-md hover:bg-brand-gold transition-colors flex items-center gap-2">
+Line 1540: opens=0, closes=0, depth=6 | {isThinking ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+Line 1541: opens=0, closes=0, depth=6 | <span>AI 解析</span>
+Line 1542: opens=0, closes=0, depth=6 | </button>
+Line 1543: opens=0, closes=1, depth=5 | </div>
+Line 1544: opens=0, closes=1, depth=4 | </div>
+Line 1545: opens=0, closes=0, depth=4 | 
+Line 1546: opens=0, closes=0, depth=4 | {/* Removed duplicated Compute Power Tier mapping, relying on Window 4 */}
+Line 1547: opens=0, closes=1, depth=3 | </div>
+Line 1548: opens=0, closes=0, depth=3 | )}
+Line 1549: opens=0, closes=1, depth=2 | </div>
+Line 1550: opens=0, closes=0, depth=2 | 
