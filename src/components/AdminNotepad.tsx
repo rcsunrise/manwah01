@@ -117,8 +117,9 @@ const AdminNotepad = ({ isOpen, setIsOpen }: { isOpen: boolean; setIsOpen: (open
   const handleSaveLog = async () => {
     setSavingLog(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const { data: profile } = await supabase.from('profiles').select('username').eq('id', user?.id).single();
+      const { data } = await supabase.auth.getUser();
+      const user = data?.user;
+      const { data: profile } = user ? await supabase.from('profiles').select('username').eq('id', user.id).single() : { data: null };
 
       const { error } = await supabase
         .from('admin_notes')

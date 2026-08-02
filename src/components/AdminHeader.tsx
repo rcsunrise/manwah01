@@ -14,7 +14,8 @@ export default function AdminHeader() {
   useEffect(() => {
     async function getAdminDept() {
       try {
-        const { data: { user } } = await supabase.auth.getUser();
+        const { data } = await supabase.auth.getUser();
+        const user = data?.user;
         
         if (user) {
           // Linking profiles with department_configs

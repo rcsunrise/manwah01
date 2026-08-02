@@ -37,7 +37,7 @@ export type SupportedAspectRatio = '1:1' | '1:4' | '1:8' | '2:3' | '3:2' | '3:4'
 export type UIAspRatioOption = SupportedAspectRatio | 'Auto' | 'Custom'; 
 
 export type Resolution = '1K' | '2K' | '4K' | '512px';
-export type ModelType = 'gemini-3-pro' | 'gemini-2.5-pro' | 'gemini-2.5-flash' | 'gemini-3-flash' | 'gemini-3.1-flash-lite-preview' | 'gemini-3.1-flash-image-preview' | 'gemini-3-pro-image-preview' | 'google/gemini-3-pro-image-preview' | 'gemini-3.1-flash-image' | 'gemini-3-pro-image' | 'google/gemini-3-pro-image' | 'gemini-2.5-flash-image' | 'openai/gpt-image-1' | 'openai/gpt-image-1.5' | 'openai/gpt-image-2' | 'routerhub/flux' | 'routerhub/midjourney';
+export type ModelType = 'gemini-3-pro' | 'gemini-2.5-pro' | 'gemini-2.5-flash' | 'gemini-3-flash' | 'gemini-3.1-flash-lite-preview' | 'gemini-3.1-flash-image-preview' | 'gemini-3-pro-image-preview' | 'google/gemini-3-pro-image-preview' | 'gemini-3.1-flash-image' | 'gemini-3-pro-image' | 'google/gemini-3-pro-image' | 'gemini-2.5-flash-image' | 'gpt-image-2' | 'openai/gpt-image-1' | 'openai/gpt-image-1.5' | 'openai/gpt-image-2' | 'routerhub/flux' | 'routerhub/midjourney';
 
 export interface GenerationConfig {
   prompt: string;
@@ -179,3 +179,187 @@ export interface AdminNote {
 }
 
 export const MAX_HISTORY_TASKS = 20;
+
+// ================= Phase 2: Creative Project & Product Visual DNA =================
+export interface CreativeProject {
+  id: string;
+  owner_id: string;
+  name: string;
+  project_type: 'poster' | 'detail_page';
+  status: 'active' | 'archived';
+  settings?: Record<string, any>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectAsset {
+  id: string;
+  project_id: string;
+  owner_id: string;
+  asset_type: 'product_photo' | 'reference_photo' | 'mask' | 'result';
+  storage_path: string;
+  mime_type: string;
+  width?: number;
+  height?: number;
+  metadata?: Record<string, any>;
+  created_at: string;
+}
+
+export interface StructuralFeature {
+  name: string;
+  description: string;
+  confidence: number;
+}
+
+export interface LockedFeature {
+  name: string;
+  rule: string;
+  priority: 'critical' | 'high' | 'normal';
+}
+
+export interface ProductVisualDNA {
+  id?: string;
+  project_id: string;
+  schema_version: number;
+  category: string;
+  subcategory?: string;
+  style: string[];
+  primaryColor: string;
+  secondaryColors: string[];
+  materials: string[];
+  structuralFeatures: StructuralFeature[];
+  functionalFeatures: string[];
+  lockedFeatures: LockedFeature[];
+  logo?: {
+    visible: boolean;
+    position?: string;
+    description?: string;
+  };
+  sourceAssetIds?: string[];
+  user_corrections?: Record<string, any>;
+  version?: number;
+  confirmed_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// ================= Phase 3: Detail Page Agent & Plan Confirmation =================
+export type AgentRunStatus =
+  | 'dna_confirmed'
+  | 'plan_generating'
+  | 'plan_review'
+  | 'plan_approved'
+  | 'tasks_generating'
+  | 'completed'
+  | 'failed'
+  | 'canceled';
+
+export const ALLOWED_STATUS_TRANSITIONS: Record<AgentRunStatus, AgentRunStatus[]> = {
+  dna_confirmed: ['plan_generating', 'canceled'],
+  plan_generating: ['plan_review', 'failed', 'canceled'],
+  plan_review: ['plan_approved', 'plan_generating', 'canceled'],
+  plan_approved: ['tasks_generating', 'canceled'],
+  tasks_generating: ['completed', 'failed', 'canceled'],
+  completed: [],
+  failed: ['plan_generating', 'tasks_generating'],
+  canceled: []
+};
+
+export interface DetailPageScreenPlan {
+  screenIndex: number;
+  screenTitle: string;
+  coreSellingPoint: string;
+  visualComposition: string;
+  lightingAndAtmosphere: string;
+  promptSuggestion: string;
+  aspectRatio: string;
+  lockedRules: string[];
+}
+
+export interface DetailPagePlan {
+  projectId: string;
+  version: number;
+  themeTitle: string;
+  targetAudience: string;
+  overallStyle: string;
+  screens: DetailPageScreenPlan[];
+  userModifications?: string;
+  confirmedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentRun {
+  id: string;
+  projectId: string;
+  ownerId: string;
+  status: AgentRunStatus;
+  currentStep: number;
+  totalSteps: number;
+  plan: DetailPagePlan | null;
+  planVersion: number;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ================= Phase 4: Image Generation Task & Rendering Queue =================
+export type DetailPageTaskStatus = 'pending' | 'generating' | 'completed' | 'failed';
+
+export interface DetailPageRenderTask {
+  id: string;
+  agentRunId: string;
+  projectId: string;
+  screenIndex: number;
+  screenTitle: string;
+  coreSellingPoint: string;
+  prompt: string;
+  aspectRatio: string;
+  lockedRules: string[];
+  referenceImageUrl?: string | null;
+  status: DetailPageTaskStatus;
+  resultImageUrl?: string | null;
+  retryCount: number;
+  errorMessage?: string | null;
+  costTokens?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DetailPageTaskBatch {
+  agentRunId: string;
+  totalTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  inProgressTasks: number;
+  tasks: DetailPageRenderTask[];
+}
+
+// ================= Phase 5: Long Image Stitching, Typography & Export =================
+export interface DetailPageCanvasConfig {
+  widthPx: number; // 750, 800, 1200
+  showBrandHeader: boolean;
+  showFooterGuarantee: boolean;
+  showSellingPointOverlay: boolean;
+  watermarkText?: string;
+  themeColor: string; // '#f59e0b', '#000000', '#1c1917'
+  screenSpacingPx: number;
+}
+
+export interface DetailPageSliceAsset {
+  screenIndex: number;
+  title: string;
+  sliceImageUrl: string;
+  width: number;
+  height: number;
+}
+
+export interface DetailPageExportResult {
+  runId: string;
+  longImageUrl: string;
+  totalHeightPx: number;
+  slices: DetailPageSliceAsset[];
+  config: DetailPageCanvasConfig;
+  exportedAt: string;
+}
+

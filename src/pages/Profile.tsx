@@ -6,7 +6,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'motion/react';
 
 export const fetchProfile = async () => {
-  const { data: { user } } = await supabase.auth.getUser();
+  const { data: userData } = await supabase.auth.getUser();
+  const user = userData?.user;
   if (!user) throw new Error('Not logged in');
   
   const { data, error } = await supabase

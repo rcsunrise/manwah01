@@ -21,7 +21,8 @@ const cleanModelName = (rawModel?: string): string => {
 };
 
 export const fetchAdminStats = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: userData } = await supabase.auth.getUser();
+    const user = userData?.user;
     if (!user) throw new Error("Not logged in");
     
     const { data: profile } = await supabase.from('profiles').select('role, dept_id, quota_limit, quota_used').eq('id', user.id).single();
@@ -267,7 +268,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     const fetchDepts = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: userData } = await supabase.auth.getUser();
+      const user = userData?.user;
       if (!user) return;
       const { data: profile } = await supabase.from('profiles').select('role, dept_id').eq('id', user.id).single();
       
@@ -307,8 +309,9 @@ export default function Dashboard() {
     setIsSubmitting(true);
     try {
       // 获取当前管理员信息
-      const { data: { user } } = await supabase.auth.getUser();
-      const { data: profile } = await supabase.from('profiles').select('username').eq('id', user?.id).single();
+      const { data: userData } = await supabase.auth.getUser();
+      const user = userData?.user;
+      const { data: profile } = user ? await supabase.from('profiles').select('username').eq('id', user.id).single() : { data: null };
 
       const { error } = await supabase
         .from('financial_records')

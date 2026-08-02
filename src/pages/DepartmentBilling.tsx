@@ -38,7 +38,8 @@ export default function DepartmentBilling() {
   const fetchRecords = async () => {
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: userData } = await supabase.auth.getUser();
+      const user = userData?.user;
       if (!user) return;
       
       const { data: profile } = await supabase.from('profiles').select('role, dept_id').eq('id', user.id).single();
@@ -344,7 +345,8 @@ export default function DepartmentBilling() {
 
     setRefundingId(logId);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData?.session;
       const token = session?.access_token;
       
       const response = await fetch('/api/admin/refund-log', {

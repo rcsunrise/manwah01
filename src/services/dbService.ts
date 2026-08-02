@@ -210,7 +210,8 @@ class DBService {
 
     // Migrate existing bloated metadata from user_metadata to prevent 400 Nginx errors
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: userData } = await supabase.auth.getUser();
+      const user = userData?.user;
       if (user && user.user_metadata?.prompt_templates) {
          personalTemplates = user.user_metadata.prompt_templates;
          // Clear it from Supabase so the JWT shrinks on the next token refresh!

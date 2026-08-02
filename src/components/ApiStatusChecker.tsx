@@ -12,7 +12,8 @@ export const ApiStatusChecker = ({ userUuid }: { userUuid: string }) => {
     setMessage('');
     
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: authData } = await supabase.auth.getSession();
+      const session = authData?.session;
       const response = await fetch('/api/ai/test-connection', {
         headers: { 
            'x-user-uuid': userUuid,

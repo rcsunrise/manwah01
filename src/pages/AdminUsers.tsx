@@ -16,7 +16,8 @@ const DeleteUserModal = ({ user, onClose, onUpdate }: {
   const confirmDelete = async () => {
     setIsVerifying(true);
     try {
-      const { data: { user: adminUser } } = await supabase.auth.getUser();
+      const { data: userData } = await supabase.auth.getUser();
+      const adminUser = userData?.user;
       const { error: signInError } = await supabase.auth.signInWithPassword({
         email: adminUser?.email || '',
         password: adminPassword,
@@ -27,7 +28,8 @@ const DeleteUserModal = ({ user, onClose, onUpdate }: {
         return;
       }
 
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData?.session;
       
       const response = await fetch(`/api/admin/users/${user.id}`, {
         method: 'DELETE',
@@ -128,7 +130,8 @@ const ResetPasswordModal = ({ user, onClose }: {
     }
     setLoading(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData?.session;
       
       const response = await fetch('/api/admin/reset-password', {
         method: 'POST',
@@ -314,7 +317,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'motion/react';
 
 export const fetchAdminUsers = async () => {
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: sessionData } = await supabase.auth.getSession();
+  const session = sessionData?.session;
   if (!session) throw new Error('Not logged in');
   
   const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
@@ -410,7 +414,8 @@ export default function AdminUsers() {
     e.preventDefault();
     setIsCreating(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData?.session;
       
       const payload: any = {
         employeeId: newEmpId,

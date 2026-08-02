@@ -15,13 +15,14 @@ import {
   Wand2, Settings2, Trash2, Loader2, FileText, Plus, Save, X, 
   Brain, Database, History, Sparkles, UserCircle, BookOpen,
   CheckSquare, Square, PlusCircle, Key, Languages, Pause, Play,
-  ChevronDown, ChevronUp, ScanFace, Tag, Maximize2, Minimize2, MinusCircle, ArrowDownUp, Lightbulb, ImageIcon
+  ChevronDown, ChevronUp, ScanFace, Tag, Maximize2, Minimize2, MinusCircle, ArrowDownUp, Lightbulb, ImageIcon, LayoutGrid
 } from '../components/IconsNew';
 import { generateEditedImage, generateImageDescription, rewritePrompt, analyzeImageAEP, rewritePromptWithAEP, measureImagePixels, generateVideo } from '../services/geminiService';
 import { dbService, MAX_STORAGE_BYTES } from '../services/dbService';
 import { supabase } from '../lib/supabase';
 import { CRAFT_VOCABULARY, CraftVocabItem } from '../data/craftVocab';
 import { ImageAttachment, UIAspRatioOption, Resolution, GeneratedResult, ModelType, SupportedAspectRatio, PromptTemplate, HistoryItem, ProcessingChannel, AEPData, GenerationTask, MAX_HISTORY_TASKS } from '../types';
+import { ProjectDnaModal } from '../components/agent/ProjectDnaModal';
 
 const API_SUPPORTED_ASPECT_RATIOS = new Set<SupportedAspectRatio>([
   '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'
@@ -215,6 +216,8 @@ const App: React.FC = () => {
   const [aepData, setAepData] = useState<AEPData | null>(null);
   const [showAEPPanel, setShowAEPPanel] = useState(false);
   const [isAepPanelPinned, setIsAepPanelPinned] = useState(true); // Default pinned
+  const [showProjectDnaModal, setShowProjectDnaModal] = useState(false);
+  const [currentProjectDnaInfo, setCurrentProjectDnaInfo] = useState<{ project: any; dna: any } | null>(null);
   const [promptMode, setPromptMode] = useState<'auto' | 'manual'>('auto');
   const [isPromptExpanded, setIsPromptExpanded] = useState(false);
   const [visibleChannelCount, setVisibleChannelCount] = useState(1);
@@ -326,7 +329,8 @@ const App: React.FC = () => {
         refreshStorageStats();
         
         // Fetch profile
-        const { data: { user } } = await supabase.auth.getUser();
+        const { data: userData } = await supabase.auth.getUser();
+        const user = userData?.user;
         if (user) {
           const { data } = await supabase
             .from('profiles')
@@ -1224,6 +1228,49 @@ You MUST adjust the proportions. The side view width MUST be exactly ${Math.roun
           {/* Sidebar - Control Panel */}
           <div className="lg:col-span-4 flex flex-col gap-6 h-auto md:h-full md:overflow-y-auto pr-0 md:pr-2 custom-scrollbar pb-[8rem] md:pb-10">
             
+            {/* Phase 2: 企划项目与产品 DNA 工作室 */}
+            <div className="p-4 bg-stone-900 text-white rounded-2xl shadow-lg border border-stone-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-amber-400" />
+                  <span className="font-bold text-sm">家具企划 & 产品 DNA</span>
+                </div>
+                {currentProjectDnaInfo?.dna?.confirmed_at && (
+                  <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-bold">
+                    DNA已锁定
+                  </span>
+                )}
+              </div>
+
+              {currentProjectDnaInfo ? (
+                <div className="bg-stone-800/80 p-2.5 rounded-xl text-xs space-y-1">
+                  <div className="font-bold text-amber-200">{currentProjectDnaInfo.project?.name}</div>
+                  <div className="text-stone-400 text-[11px]">
+                    {currentProjectDnaInfo.dna?.category} · {currentProjectDnaInfo.dna?.primaryColor} · {currentProjectDnaInfo.dna?.materials?.join(', ')}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-[11px] text-stone-400 leading-relaxed">
+                  选择或创建企划项目，上传产品图自动提炼品类、材质、几何与不可篡改的锁定规则。
+                </p>
+              )}
+
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button
+                  onClick={() => setShowProjectDnaModal(true)}
+                  className="w-full py-2 bg-[#B28C5A] hover:bg-[#A17C4B] text-white font-bold text-xs rounded-xl transition flex items-center justify-center gap-1 shadow"
+                >
+                  <Sparkles className="w-3.5 h-3.5" /> {currentProjectDnaInfo ? '管理 DNA' : 'DNA 工作室'}
+                </button>
+                <button
+                  onClick={() => navigate('/creative-canvas/new')}
+                  className="w-full py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 font-bold text-xs rounded-xl transition flex items-center justify-center gap-1 shadow"
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" /> 视觉企划画布
+                </button>
+              </div>
+            </div>
+
             {/* 1. 产品通道录入 (Window 1) - UPDATED with onAddImages distribution */}
             <div className="sidebar-section premium-shadow">
               <div 
@@ -1997,6 +2044,16 @@ You MUST adjust the proportions. The side view width MUST be exactly ${Math.roun
           };
           setGenerationHistory(prev => [newTask, ...prev].slice(0, MAX_HISTORY_TASKS));
           setShowHistory(false);
+        }}
+      />
+
+      {/* Project DNA Modal */}
+      <ProjectDnaModal
+        isOpen={showProjectDnaModal}
+        onClose={() => setShowProjectDnaModal(false)}
+        onSelectProjectAndDna={(project, dna) => {
+          setCurrentProjectDnaInfo({ project, dna });
+          setShowProjectDnaModal(false);
         }}
       />
     </div>

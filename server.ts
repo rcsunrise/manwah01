@@ -6,6 +6,10 @@ import path from 'path';
 import sharp from 'sharp';
 import fs from 'fs';
 import { supabaseAdmin} from './src/lib/supabase';
+import adminRoutes from './server/routes/adminRoutes';
+import projectRoutes from './server/routes/projectRoutes';
+import agentRoutes from './server/routes/agentRoutes';
+import canvasRoutes from './server/routes/canvasRoutes';
 
 function fileLog(msg: string) {
   try { fs.appendFileSync('debug.log', msg + '\n'); } catch (e) {}
@@ -329,6 +333,12 @@ async function startServer() {
   app.use(express.json({ limit: '500mb' }));
   app.use(express.urlencoded({ limit: '500mb', extended: true }));
   app.use(authenticateRequest);
+
+  // Mount modular API routers
+  app.use('/api/admin', adminRoutes);
+  app.use('/api/projects', projectRoutes);
+  app.use('/api/agent', agentRoutes);
+  app.use('/api/canvases', canvasRoutes);
 
   // API Route for uploading mask and clean image
   app.post('/api/pre_process/mask', upload.fields([{ name: 'clean_image', maxCount: 1 }, { name: 'mask_image', maxCount: 1 }]), async (req, res) => {
@@ -763,9 +773,7 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
 
       const doFetch = async (currentBaseUrl: string, currentApiKey: string, currentProvider: string) => {
         let firstModelOption = model;
-        let secondModelOption: string | null = null;
 
-        // Determine if we have a stable vs preview fallback
         let cleanModel = firstModelOption;
         if (cleanModel.startsWith("google/")) {
           cleanModel = cleanModel.replace("google/", "");
@@ -773,13 +781,38 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
           cleanModel = cleanModel.replace("openai/", "");
         }
 
-        if (cleanModel === 'gemini-3.1-flash-image') {
-          secondModelOption = 'gemini-3.1-flash-image-preview';
-        } else if (cleanModel === 'gemini-3-pro-image') {
-          secondModelOption = 'gemini-3-pro-image-preview';
-        } else if (cleanModel === 'google/gemini-3-pro-image') {
-          secondModelOption = 'google/gemini-3-pro-image-preview';
+        // Construct prioritized candidate models array
+        const candidateModels: string[] = [firstModelOption, cleanModel];
+
+        if (cleanModel === 'gpt-image-2' || firstModelOption.includes('gpt-image-2')) {
+          candidateModels.length = 0;
+          candidateModels.push('gpt-image-2');
+        } else if (cleanModel.includes('3-pro') || cleanModel.includes('pro')) {
+          candidateModels.push('imagen-3.0-generate-002');
+          candidateModels.push('gemini-3.1-flash-image-preview');
+          candidateModels.push('gemini-3.1-flash-image');
+          candidateModels.push('gemini-2.5-flash-image');
+          candidateModels.push('imagen-3.0-fast-generate-001');
+          candidateModels.push('gpt-image-1');
+        } else if (cleanModel.includes('flash')) {
+          candidateModels.push('gemini-3.1-flash-image-preview');
+          candidateModels.push('gemini-3.1-flash-image');
+          candidateModels.push('gemini-2.5-flash-image');
+          candidateModels.push('imagen-3.0-generate-002');
+          candidateModels.push('imagen-3.0-fast-generate-001');
+          candidateModels.push('gpt-image-1');
+        } else if (cleanModel.includes('gpt-image')) {
+          candidateModels.push('gpt-image-2');
+          candidateModels.push('gpt-image-1.5');
+          candidateModels.push('gpt-image-1');
+        } else {
+          candidateModels.push('imagen-3.0-generate-002');
+          candidateModels.push('gemini-3.1-flash-image-preview');
+          candidateModels.push('gemini-2.5-flash-image');
+          candidateModels.push('gpt-image-1');
         }
+
+        const uniqueCandidates = Array.from(new Set(candidateModels));
 
         const executeRequestForModel = async (tgtModel: string) => {
           let finalModel = tgtModel;
@@ -800,58 +833,45 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
           if (isOpenAI) {
             let baseForOpenAI = currentBaseUrl.replace(/\/v1beta\/?$/, '').replace(/\/v1\/?$/, '').replace(/\/+$/, '');
             
-            let sizeStr = "1024x1024";
-            if (resolution === '2K' || resolution.toLowerCase() === '2k') {
-               sizeStr = "2048x2048";
-            } else if (resolution === '4K' || resolution.toLowerCase() === '4k') {
-               sizeStr = "4096x4096";  
+            if (!images || images.length === 0 || !images[0]?.data) {
+               throw new Error("分镜图片生成必须包含产品参考图片 (reference image)");
             }
 
-            if (images && images.length > 0) {
-              // Edit mode
-              targetUrl = `${baseForOpenAI}/v1/images/edits`;
-              isMultipart = true;
-              formData = new FormData();
-              formData.append('model', finalModel);
-              formData.append('prompt', prompt);
-              formData.append('n', "1");
-              formData.append('size', sizeStr);
-              
-              // VectorEngine specific parameters
-              if (resolution.toLowerCase() === '2k') {
-                 formData.append('resolution', "2K"); 
-              } else if (resolution.toLowerCase() === '4k') {
-                 formData.append('resolution', "4K"); 
-              }
-              if (dynamicImageControlStrength !== undefined) formData.append('image_control_strength', String(dynamicImageControlStrength));
-              if (dynamicNegativePrompt !== undefined) formData.append('negative_prompt', dynamicNegativePrompt);
-              
-              for (let i = 0; i < images.length; i++) {
-                const img = images[i];
-                const buffer = Buffer.from(img.data, 'base64');
-                const blob = new Blob([buffer], { type: img.mimeType });
-                
-                formData.append('image', blob, `image${i}.png`);
-                formData.append('file', blob, `image${i}.png`);
-              }
-            } else {
-              // Generate mode
-              targetUrl = `${baseForOpenAI}/v1/images/generations`;
-              reqPayload = {
-                 model: finalModel,
-                 prompt: prompt,
-                 n: 1,
-                 size: sizeStr
-              };
-              
-              if (resolution.toLowerCase() === '2k') {
-                 reqPayload.resolution = "2K"; 
-              } else if (resolution.toLowerCase() === '4k') {
-                 reqPayload.resolution = "4K"; 
-              }
-              if (dynamicImageControlStrength !== undefined) reqPayload.image_control_strength = dynamicImageControlStrength;
-              if (dynamicNegativePrompt !== undefined) reqPayload.negative_prompt = dynamicNegativePrompt;
+            const refImg = images[0];
+            const cleanData = refImg.data.includes(',') ? refImg.data.split(',')[1] : refImg.data;
+            if (!cleanData || cleanData.length < 50) {
+               throw new Error("产品参考图片 Base64 数据格式错误或为空");
             }
+            const imgBuffer = Buffer.from(cleanData, 'base64');
+            if (imgBuffer.length > 50 * 1024 * 1024) {
+               throw new Error("产品参考图片大小超过 50MB 限制");
+            }
+
+            targetUrl = `${baseForOpenAI}/v1/images/edits`;
+            isMultipart = true;
+            formData = new FormData();
+            formData.append('model', 'gpt-image-2');
+            formData.append('prompt', prompt);
+            formData.append('n', "1");
+
+            let sizeStr = "1536x1024";
+            if (aspectRatio === '3:4' || aspectRatio === '9:16' || aspectRatio === '1:2') {
+               sizeStr = "1024x1536";
+            } else if (aspectRatio === '1:1') {
+               sizeStr = "1024x1024";
+            } else {
+               sizeStr = "1536x1024";
+            }
+            formData.append('size', sizeStr);
+            formData.append('quality', 'high');
+            formData.append('output_format', 'png');
+            formData.append('input_fidelity', 'high');
+            formData.append('background', 'auto');
+
+            const mimeType = refImg.mimeType || 'image/png';
+            const ext = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : (mimeType.includes('webp') ? 'webp' : 'png');
+            const blob = new Blob([imgBuffer], { type: mimeType });
+            formData.append('image', blob, `product_reference.${ext}`);
           }
 
           if (currentProvider === "google") {
@@ -864,7 +884,7 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
             fetchHeaders["Content-Type"] = "application/json";
           }
           
-          if (currentProvider === "routerhub" || currentProvider === "vectorengine") {
+          if (currentProvider === "routerhub" || currentProvider === "vectorengine" || currentProvider === "openai") {
              fetchHeaders["Authorization"] = `Bearer ${currentApiKey}`;
           } else {
              fetchHeaders["x-goog-api-key"] = currentApiKey;
@@ -897,6 +917,11 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
 
           const text = await resObj.text();
           fileLog(`[OpenAI Proxy Debug] fetched texts: ` + text.substring(0, 300));
+          
+          if (resObj.status === 401 || resObj.status === 403) {
+             throw new Error(`[Status ${resObj.status}] OpenAI 接口身份校验或模型访问拒绝，请检查 API Key、组织验证以及 gpt-image-2 模型的调用权限 (${text.substring(0, 150)})`);
+          }
+
           let data;
           try {
             data = JSON.parse(text);
@@ -915,11 +940,10 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
           // Transform OpenAI response to Google format so frontend parses correctly
           if (isOpenAI) {
              let b64Data = data.data?.[0]?.b64_json;
-             const imgUrl = data.data?.[0]?.url;
              
-             if (!b64Data && imgUrl) {
+             if (!b64Data && data.data?.[0]?.url) {
                 try {
-                  const imgRes = await fetch(imgUrl);
+                  const imgRes = await fetch(data.data[0].url);
                   const imgBuffer = await imgRes.arrayBuffer();
                   b64Data = Buffer.from(imgBuffer).toString('base64');
                 } catch (e: any) {
@@ -927,10 +951,12 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
                 }
              }
              
-             if (!b64Data) {
-                throw new Error(`OpenAI format response missing b64_json/url imageData. Data: ${JSON.stringify(data).substring(0, 500)}`);
+             if (!b64Data || typeof b64Data !== 'string' || b64Data.trim() === '' || b64Data.length < 100) {
+                throw new Error(`OpenAI 响应数据缺少有效的 response.data[0].b64_json。内容: ${text.substring(0, 200)}`);
              }
              data = {
+               actualModel: 'gpt-image-2',
+               provider: 'openai',
                candidates: [
                  {
                    content: {
@@ -951,22 +977,29 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
           return data;
         };
 
-        try {
-          const res = await executeRequestForModel(firstModelOption);
-          return { data: res, actualModel: firstModelOption };
-        } catch (err: any) {
-          const errMsg = err.message || "";
-          if (secondModelOption && (errMsg.includes("404") || errMsg.includes("not found") || errMsg.includes("supported") || errMsg.includes("Status 404"))) {
-             console.log(`[Proxy fallback] Model ${firstModelOption} not supported or 404. Falling back to key: ${secondModelOption}...`);
-             try {
-                const res = await executeRequestForModel(secondModelOption);
-                return { data: res, actualModel: secondModelOption };
-             } catch (fallbackErr: any) {
-                throw new Error(`Original Model Error: ${errMsg}. Fallback Mode Option: ${secondModelOption} failed too: ${fallbackErr.message}`);
-             }
+        let lastError: any = null;
+        for (const candidate of uniqueCandidates) {
+          try {
+            const res = await executeRequestForModel(candidate);
+            return { data: res, actualModel: candidate };
+          } catch (err: any) {
+            lastError = err;
+            const errMsg = err.message || "";
+            const isModelNotFoundError = errMsg.includes("404") || 
+                                          errMsg.includes("not found") || 
+                                          errMsg.includes("supported") || 
+                                          errMsg.includes("Status 404") ||
+                                          errMsg.includes("400") ||
+                                          errMsg.includes("INVALID_ARGUMENT");
+            if (isModelNotFoundError) {
+              console.log(`[Proxy fallback] Model candidate "${candidate}" failed (${errMsg}). Retrying next candidate...`);
+              continue;
+            } else {
+              throw err;
+            }
           }
-          throw err;
         }
+        throw lastError || new Error(`All candidate image generation models failed for input model "${model}"`);
       };
 
       res.setHeader('Content-Type', 'application/json');
@@ -1220,386 +1253,10 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
 });
 
 
-  // API Route for Admin to test API connection
-  app.post('/api/admin/test-connection', express.json(), async (req, res) => {
-    try {
-      const authHeader = req.headers.authorization;
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'Unauthorized' });
-      }
-      const token = authHeader.split(' ')[1];
-      const { data: { user: adminUser }, error: verifyError } = await supabaseAdmin.auth.getUser(token);
-      if (verifyError || !adminUser) {
-        return res.status(401).json({ error: 'Invalid token' });
-      }
-      
-      const { data: adminProfile } = await supabaseAdmin.from('profiles').select('role').eq('id', adminUser.id).single();
-      if (!adminProfile || (adminProfile.role !== 'admin' && adminProfile.role !== 'dept_admin')) {
-         return res.status(403).json({ error: 'Forbidden' });
-      }
-
-      const { baseUrl, apiKey, provider } = req.body;
-      if (!baseUrl || !apiKey) {
-        return res.status(400).json({ success: false, message: "Missing baseUrl or apiKey" });
-      }
-      
-      let targetUrl = `${baseUrl.replace(/\/+$/, '')}`;
-      if (provider === "routerhub" || provider === "vectorengine" || targetUrl.includes('generative')) {
-          targetUrl = targetUrl.replace(/\/v1beta\/?$/, '').replace(/\/v1\/?$/, '');
-      }
-      
-      let testMethod = 'POST';
-      let body: any = JSON.stringify({
-         contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
-         generationConfig: { maxOutputTokens: 1 }
-      });
-      
-      if (provider === "routerhub" || provider === "vectorengine") {
-          targetUrl += "/v1/models";
-          testMethod = 'GET';
-          body = undefined;
-      } else {
-          targetUrl += "/v1beta/models/gemini-1.5-flash:generateContent";
-          if (provider === "google" || targetUrl.includes('generativelanguage.googleapis.com')) {
-             targetUrl += `?key=${apiKey}`;
-          }
-      }
-      
-      const headers: any = {};
-      if (testMethod !== 'GET') headers["Content-Type"] = "application/json";
-      
-      if (provider === "routerhub" || provider === "vectorengine") {
-          headers["Authorization"] = `Bearer ${apiKey}`;
-      } else {
-          headers["x-goog-api-key"] = apiKey;
-      }
-
-      const fetchOptions: any = { headers, method: testMethod };
-      if (body) fetchOptions.body = body;
-
-      const response = await fetch(targetUrl, fetchOptions);
-      if (!response.ok) {
-          const errText = await response.text();
-          let parsedErr = errText;
-          try {
-             let j = JSON.parse(errText);
-             if (j.error && j.error.message) parsedErr = j.error.message;
-          } catch(e) {}
-          return res.status(200).json({ success: false, status: response.status, message: `(${response.status}) ${parsedErr.slice(0, 300)}` });
-      }
-      const data = await response.json();
-      return res.json({ success: true, message: "通信测试成功" });
-    } catch (err: any) {
-      return res.status(500).json({ success: false, message: err.message });
-    }
-  });
-
-  // API Route to refund points for failed image generation
-  app.post('/api/admin/refund-log', express.json(), async (req, res) => {
-    try {
-      const authHeader = req.headers.authorization;
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'Unauthorized' });
-      }
-      const token = authHeader.split(' ')[1];
-      const { data: { user: adminUser }, error: verifyError } = await supabaseAdmin.auth.getUser(token);
-      if (verifyError || !adminUser) {
-        return res.status(401).json({ error: 'Invalid token' });
-      }
-
-      // Check admin/dept_admin role
-      const { data: adminProfile } = await supabaseAdmin
-        .from('profiles')
-        .select('role, dept_id')
-        .eq('id', adminUser.id)
-        .single();
-        
-      if (!adminProfile || (adminProfile.role !== 'admin' && adminProfile.role !== 'dept_admin')) {
-        return res.status(403).json({ error: 'Forbidden: Requires admin or dept_admin' });
-      }
-
-      const { logId, comment = "生图失败，人工纠偏核减" } = req.body;
-      if (!logId) {
-        return res.status(400).json({ error: 'Missing logId' });
-      }
-
-      // 1. Fetch the usage log
-      const { data: log, error: logError } = await supabaseAdmin
-        .from('usage_logs')
-        .select('*')
-        .eq('id', logId)
-        .single();
-
-      if (logError || !log) {
-        return res.status(404).json({ error: 'Log not found' });
-      }
-
-      // 2. Department isolation check for dept_admin
-      if (adminProfile.role === 'dept_admin') {
-        const { data: userProfile } = await supabaseAdmin
-          .from('profiles')
-          .select('dept_id')
-          .eq('id', log.user_id)
-          .single();
-
-        if (!userProfile || userProfile.dept_id !== adminProfile.dept_id) {
-          return res.status(403).json({ error: 'Forbidden: You can only refund users from your own department' });
-        }
-      }
-
-      // 3. Double-refund prevention
-      if (log.tokens_used <= 0) {
-        return res.status(400).json({ error: 'This log has already been refunded or holds 0 points' });
-      }
-
-      // 4. Fetch user's current profile balance/use
-      const { data: userProfile, error: profileError } = await supabaseAdmin
-        .from('profiles')
-        .select('quota_used, username')
-        .eq('id', log.user_id)
-        .single();
-
-      if (profileError || !userProfile) {
-        return res.status(404).json({ error: 'User profile not found' });
-      }
-
-      const refundPoints = log.tokens_used;
-      const originUsed = userProfile.quota_used || 0;
-      const targetUsed = Math.max(0, originUsed - refundPoints);
-
-      // 5. Update user profile to deduct their quota_used
-      const { error: profileUpdateError } = await supabaseAdmin
-        .from('profiles')
-        .update({ quota_used: targetUsed })
-        .eq('id', log.user_id);
-
-      if (profileUpdateError) {
-        throw new Error(`Profile update failed: ${profileUpdateError.message}`);
-      }
-
-      // 6. Update usage log to set tokens_used and cost_usd to 0, and prepend a tag
-      const updatedModelName = `[已核退-${comment}] ` + log.model;
-      const { error: logUpdateError } = await supabaseAdmin
-        .from('usage_logs')
-        .update({
-          tokens_used: 0,
-          cost_usd: 0,
-          model: updatedModelName.slice(0, 250) // prevent overflow if string is long
-        })
-        .eq('id', logId);
-
-      if (logUpdateError) {
-        // Rollback user balance if database update failed
-        await supabaseAdmin.from('profiles').update({ quota_used: originUsed }).eq('id', log.user_id);
-        throw new Error(`Usage log update failed: ${logUpdateError.message}`);
-      }
-
-      console.log(`[Billing Audit] Refunded user ${userProfile.username} (${log.user_id}) for log ${logId}: ${refundPoints} points refunded.`);
-
-      return res.json({
-        success: true,
-        message: `成功退还 ${userProfile.username} ${refundPoints}点额度，已核回为 0 点。`,
-        pointsReturned: refundPoints
-      });
-
-    } catch (err: any) {
-      console.error("Refund endpoint failed:", err);
-      return res.status(500).json({ error: err.message || 'Internal server error during refund' });
-    }
-  });
-
-  // API Route for Admin or Dept Admin to create a user account
-  app.post('/api/admin/create-user', async (req, res) => {
-    try {
-      // Extract Authorization header
-      const authHeader = req.headers.authorization;
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'Unauthorized' });
-      }
-      const token = authHeader.split(' ')[1];
-      const { data: { user: adminUser }, error: verifyError } = await supabaseAdmin.auth.getUser(token);
-      if (verifyError || !adminUser) {
-        return res.status(401).json({ error: 'Invalid token' });
-      }
-
-      // Check admin/dept_admin role
-      const { data: adminProfile } = await supabaseAdmin
-        .from('profiles')
-        .select('role, dept_id')
-        .eq('id', adminUser.id)
-        .single();
-        
-      if (!adminProfile || (adminProfile.role !== 'admin' && adminProfile.role !== 'dept_admin')) {
-         return res.status(403).json({ error: 'Forbidden: Requires admin or dept_admin' });
-      }
-
-      const { employeeId, password, username, quotaLimit, dept_id } = req.body;
-
-      if (!employeeId || !password) {
-        return res.status(400).json({ error: 'Missing employeeId or password.' });
-      }
-
-      let targetDeptId = dept_id;
-      if (adminProfile.role === 'dept_admin') {
-         targetDeptId = adminProfile.dept_id; // lock to their department
-      }
-
-      // 1. Create auth user with Admin SDK
-      const authResponse = await supabaseAdmin.auth.admin.createUser({
-        email: `${employeeId}@manwah.com`, // using manwah.com as domain or yourcompany
-        password: password,
-        email_confirm: true 
-      });
-
-      if (authResponse.error) {
-        return res.status(400).json({ error: authResponse.error.message });
-      }
-
-      // 2. The trigger creates the profile, we just need to update it with the extra info
-      if (authResponse.data?.user?.id) {
-        const updatePayload: any = { 
-          employee_id: employeeId, 
-          username: username || employeeId, 
-          quota_limit: quotaLimit ? parseInt(quotaLimit) : 100000 
-        };
-        
-        if (targetDeptId) {
-           updatePayload.dept_id = targetDeptId;
-        }
-
-        const { error: profileError } = await supabaseAdmin
-          .from('profiles')
-          .update(updatePayload)
-          .eq('id', authResponse.data.user.id);
-
-        if (profileError) {
-           console.error("Profile update error:", profileError);
-           // Warning: non-fatal, but logged
-        }
-      }
-
-      return res.status(200).json({ success: true, user: authResponse.data.user });
-    } catch (e: any) {
-      console.error("Create user error:", e);
-      return res.status(500).json({ error: e.message });
-    }
-  });
-
-  // API Route for Admin to reset a user's password
-  app.post('/api/admin/reset-password', async (req, res) => {
-    try {
-      const { userId, newPassword } = req.body;
-
-      if (!userId || !newPassword) {
-        return res.status(400).json({ error: 'Missing userId or newPassword.' });
-      }
-
-      // Check admin status of requester via JWT
-      const authHeader = req.headers.authorization;
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'Unauthorized' });
-      }
-      const token = authHeader.split(' ')[1];
-      const { data: { user: adminUser }, error: verifyError } = await supabaseAdmin.auth.getUser(token);
-      if (verifyError || !adminUser) {
-        return res.status(401).json({ error: 'Invalid token' });
-      }
-      
-      const adminId = adminUser.id;
-      const { data: adminProfile } = await supabaseAdmin
-        .from('profiles')
-        .select('role, dept_id')
-        .eq('id', adminId)
-        .single();
-        
-      if (!adminProfile || (adminProfile.role !== 'admin' && adminProfile.role !== 'dept_admin')) {
-         return res.status(403).json({ error: 'Forbidden.' });
-      }
-
-      // If dept_admin, verify target user belongs to the same department
-      if (adminProfile.role === 'dept_admin') {
-        const { data: targetProfile } = await supabaseAdmin
-          .from('profiles')
-          .select('dept_id')
-          .eq('id', userId)
-          .single();
-        
-        if (!targetProfile || targetProfile.dept_id !== adminProfile.dept_id) {
-          return res.status(403).json({ error: 'Forbidden: You can only manage users in your own department.' });
-        }
-      }
-
-      const authResponse = await supabaseAdmin.auth.admin.updateUserById(userId, {
-        password: newPassword
-      });
-
-      if (authResponse.error) {
-        return res.status(400).json({ error: authResponse.error.message });
-      }
-
-      return res.status(200).json({ success: true });
-    } catch (e: any) {
-      console.error("Reset password error:", e);
-      return res.status(500).json({ error: e.message });
-    }
-  });
-
-  // API Route for Admin to delete a user
-  app.delete('/api/admin/users/:userId', async (req, res) => {
-    try {
-      const { userId } = req.params;
-
-      // Check admin status of requester via JWT
-      const authHeader = req.headers.authorization;
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'Unauthorized' });
-      }
-      const token = authHeader.split(' ')[1];
-      const { data: { user: adminUser }, error: verifyError } = await supabaseAdmin.auth.getUser(token);
-      if (verifyError || !adminUser) {
-        return res.status(401).json({ error: 'Invalid token' });
-      }
-      
-      const adminId = adminUser.id;
-      const { data: adminProfile } = await supabaseAdmin
-        .from('profiles')
-        .select('role, dept_id')
-        .eq('id', adminId)
-        .single();
-        
-      if (!adminProfile || (adminProfile.role !== 'admin' && adminProfile.role !== 'dept_admin')) {
-         return res.status(403).json({ error: 'Forbidden.' });
-      }
-
-      // If dept_admin, verify target user belongs to the same department
-      if (adminProfile.role === 'dept_admin') {
-        const { data: targetProfile } = await supabaseAdmin
-          .from('profiles')
-          .select('dept_id')
-          .eq('id', userId)
-          .single();
-        
-        if (!targetProfile || targetProfile.dept_id !== adminProfile.dept_id) {
-          return res.status(403).json({ error: 'Forbidden: You can only delete users in your own department.' });
-        }
-      }
-
-      // Delete the user from auth.users
-      const authResponse = await supabaseAdmin.auth.admin.deleteUser(userId);
-
-      if (authResponse.error) {
-        return res.status(400).json({ error: authResponse.error.message });
-      }
-      
-      // Delete from profiles
-      await supabaseAdmin.from('profiles').delete().eq('id', userId);
-
-      return res.status(200).json({ success: true });
-    } catch (e: any) {
-      console.error("Delete user error:", e);
-      return res.status(500).json({ error: e.message });
-    }
-  });
+  // Mount modular admin routes
+  app.use('/api/admin', adminRoutes);
+  app.use('/api/projects', projectRoutes);
+  app.use('/api/agent-runs', agentRoutes);
 
   app.get('/api/ai/test-connection', async (req, res) => {
     const userUuid = req.headers['x-user-uuid'] as string;
@@ -1777,6 +1434,9 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
       // Only set key in query for direct Google calls
       if (provider === "google") {
         urlObj.searchParams.set("key", apiKey as string);
+      } else {
+        // RouterHub & VectorEngine 使用 Authorization: Bearer <token> 头，必须删除 URL 中的 query key，防止上游误认为是 Google API Key
+        urlObj.searchParams.delete("key");
       }
       
       const targetUrl = urlObj.toString();
@@ -1967,10 +1627,13 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
   app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
     console.error("Express App Error:", err.message || err);
     if (res.headersSent) return next(err);
-    const status = err.status || 500;
+    const status = err.statusCode || err.status || 500;
+    const errorMsg = err.message || (status === 413 ? "Payload Too Large: The image is too large." : "Server Error");
     res.status(status).json({ 
-      error: status === 413 ? "Payload Too Large: The image is too large." : "Server Error", 
-      message: err.message 
+      success: false,
+      error: errorMsg, 
+      message: errorMsg,
+      statusCode: status
     });
   });
 

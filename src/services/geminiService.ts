@@ -326,7 +326,7 @@ export const generateEditedImage = async (
   modelType: ModelType = 'gemini-3.1-flash-image-preview',
   seed: number | undefined,
   onLog: (message: string) => void
-): Promise<{ imageUrl: string, pointsUsed: number, actualModel?: string, cropRetentionRate?: number, finalFitModeUsed?: string }> => {
+): Promise<{ imageUrl: string, pointsUsed: number, actualModel?: string, provider?: string, cropRetentionRate?: number, finalFitModeUsed?: string }> => {
   const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
   if (!apiKey) {
     onLog("Error: API Key not found.");
@@ -339,6 +339,8 @@ export const generateEditedImage = async (
     modelName = 'gemini-3-pro-image-preview';
   } else if (modelType === 'gemini-3-flash' || modelType === 'gemini-2.5-flash') {
     modelName = 'gemini-3.1-flash-image-preview';
+  } else if (modelType === 'gpt-image-2' || modelType === 'openai/gpt-image-2') {
+    modelName = 'gpt-image-2';
   }
 
   onLog(`Initializing Gemini client with model: ${modelName}`);
@@ -474,7 +476,8 @@ export const generateEditedImage = async (
                  return {
                    imageUrl: `data:${mimeType};base64,${base64Str}`,
                    pointsUsed: data.points_deducted || 0,
-                   actualModel: data.actualModel,
+                   actualModel: data.actualModel || 'gpt-image-2',
+                   provider: data.provider || 'openai',
                    cropRetentionRate: data.cropRetentionRate,
                    finalFitModeUsed: data.finalFitModeUsed
                  };

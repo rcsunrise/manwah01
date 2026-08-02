@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { MonitorPlay, Settings, LayoutDashboard, Users, UserCircle, Menu, ChevronRight } from 'lucide-react';
+import { MonitorPlay, Settings, LayoutDashboard, Users, UserCircle, Menu, ChevronRight, LayoutGrid } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 interface LayoutProps {
@@ -15,16 +15,16 @@ export default function Layout({ children }: LayoutProps) {
   const [showSettingsSheet, setShowSettingsSheet] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user) {
-        supabase.from('profiles').select('role').eq('id', user.id).single()
-          .then(({ data }) => {
-            if (data?.role === 'admin' || data?.role === 'dept_admin') {
+    supabase.auth.getUser().then(({ data, error }) => {
+      if (!error && data?.user) {
+        supabase.from('profiles').select('role').eq('id', data.user.id).single()
+          .then(({ data: profileData }) => {
+            if (profileData?.role === 'admin' || profileData?.role === 'dept_admin') {
               setIsAdmin(true);
             }
-          });
+          }).catch(() => {});
       }
-    });
+    }).catch(() => {});
   }, []);
 
   const settingsItems = [
@@ -38,6 +38,7 @@ export default function Layout({ children }: LayoutProps) {
 
   const getActiveTab = () => {
     if (location.pathname.startsWith('/manwah')) return 'manwah';
+    if (location.pathname.startsWith('/creative-canvas')) return 'creative-canvas';
     if (location.pathname.startsWith('/dashboard')) return 'dashboard';
     if (location.pathname.startsWith('/admin/billing')) return 'billing';
     if (location.pathname.startsWith('/admin/users')) return 'users';
@@ -67,8 +68,19 @@ export default function Layout({ children }: LayoutProps) {
             >
               <div className="flex items-center gap-3">
                 <MonitorPlay size={18} strokeWidth={2.5} />
-                <span className="text-sm">工作流</span>
+                <span className="text-sm">传统工作流</span>
               </div>
+            </button>
+
+            <button 
+              onClick={() => navigate('/creative-canvas/new')} 
+              className="w-full flex items-center justify-between p-3 rounded-2xl transition-all text-[#B28C5A] bg-[#F9F5EF] hover:bg-[#F5EFE6] font-bold shadow-sm"
+            >
+              <div className="flex items-center gap-3">
+                <LayoutGrid size={18} strokeWidth={2.5} />
+                <span className="text-sm">视觉企划画布</span>
+              </div>
+              <span className="text-[10px] bg-[#B28C5A] text-white font-bold px-1.5 py-0.5 rounded-full">NEW</span>
             </button>
 
             <div className="pt-6 pb-2 px-3">

@@ -5,6 +5,7 @@ import LoginPage from './pages/Login';
 import Layout from './components/Layout';
 
 const ManwahStudio = lazy(() => import('./pages/ManwahStudio'));
+const CreativeCanvasPage = lazy(() => import('./pages/creative-canvas/CreativeCanvasPage'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const AdminUsers = lazy(() => import('./pages/AdminUsers'));
 const DepartmentBilling = lazy(() => import('./pages/DepartmentBilling'));
@@ -16,8 +17,19 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (error) {
+        console.warn("Auth session error:", error.message);
+        supabase.auth.signOut().catch(() => {});
+        setSession(null);
+      } else {
+        setSession(data?.session || null);
+      }
+      setLoading(false);
+    }).catch(err => {
+      console.warn("Failed to get session:", err);
+      supabase.auth.signOut().catch(() => {});
+      setSession(null);
       setLoading(false);
     });
 
@@ -45,7 +57,20 @@ const SuspenseFallback = () => <div className="min-h-screen flex items-center ju
 function ProtectedApp() {
   const location = useLocation();
   const isManwah = location.pathname.startsWith('/manwah');
+  const isCreativeCanvas = location.pathname.startsWith('/creative-canvas');
   
+  if (isCreativeCanvas) {
+    return (
+      <Suspense fallback={<SuspenseFallback />}>
+        <Routes>
+          <Route path="/creative-canvas/new" element={<CreativeCanvasPage />} />
+          <Route path="/creative-canvas/:workspaceId" element={<CreativeCanvasPage />} />
+          <Route path="*" element={<Navigate to="/creative-canvas/new" replace />} />
+        </Routes>
+      </Suspense>
+    );
+  }
+
   return (
     <Layout>
       <div style={{ display: isManwah ? 'block' : 'none', height: '100%', width: '100%' }}>
