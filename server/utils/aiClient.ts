@@ -32,7 +32,7 @@ export async function resolveApiConfig(userUuid: string = 'system') {
             deptId: profile.dept_id,
             provider: (deptConfig.api_base_url || "").includes("vectorengine") ? "vectorengine" : "routerhub",
             routingMode: deptConfig.routing_mode,
-            method1Key: deptConfig.method1Key
+            method1Key: deptConfig.method1_key
           };
         }
       }

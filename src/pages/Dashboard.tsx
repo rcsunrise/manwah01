@@ -290,6 +290,8 @@ export default function Dashboard() {
   }, []);
 
   const handleLogout = async () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('manwah_user');
     await supabase.auth.signOut();
     queryClient.clear();
     window.location.href = '/login';

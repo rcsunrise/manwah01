@@ -47,6 +47,12 @@ export default function LoginPage() {
         }
         setLoading(false);
       } else {
+        if (data?.session?.access_token) {
+          localStorage.setItem('token', data.session.access_token);
+        }
+        if (data?.user) {
+          localStorage.setItem('manwah_user', JSON.stringify(data.user));
+        }
         // 登录成功跳转，强制刷新保障全局状态干净
         window.location.href = '/manwah';
       }
@@ -111,20 +117,32 @@ export default function LoginPage() {
             </div>
           </div>
           
-          <button 
-            type="submit" 
-            disabled={loading}
-            className="w-full flex items-center justify-center gap-2 py-4 mt-8 md:mt-0 bg-stone-900 hover:bg-stone-800 text-brand-gold md:text-white rounded-none md:rounded-xl font-bold transition-colors disabled:opacity-50"
-          >
-            {loading ? (
-              <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            ) : (
-              <>
-                确认登录
-                <LogIn className="w-5 h-5" />
-              </>
-            )}
-          </button>
+          <div className="space-y-3 pt-2">
+            <button 
+              type="submit" 
+              disabled={loading}
+              className="w-full flex items-center justify-center gap-2 py-4 bg-stone-900 hover:bg-stone-800 text-brand-gold md:text-white rounded-none md:rounded-xl font-bold transition-colors disabled:opacity-50"
+            >
+              {loading ? (
+                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <>
+                  确认登录
+                  <LogIn className="w-5 h-5" />
+                </>
+              )}
+            </button>
+
+            <button 
+              type="button"
+              onClick={() => {
+                window.location.href = '/manwah';
+              }}
+              className="w-full flex items-center justify-center gap-2 py-3.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-none md:rounded-xl font-semibold transition-colors text-sm"
+            >
+              🚀 一键进入演示体验模式 (Demo Mode)
+            </button>
+          </div>
         </form>
       </motion.div>
     </div>

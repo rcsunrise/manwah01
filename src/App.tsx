@@ -1,6 +1,6 @@
 import React, { useEffect, useState, Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { supabase } from './lib/supabase';
+import { supabase, initRuntimeSupabase } from './lib/supabase';
 import LoginPage from './pages/Login';
 import Layout from './components/Layout';
 
@@ -15,34 +15,73 @@ const Profile = lazy(() => import('./pages/Profile'));
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [configError, setConfigError] = useState<string | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data, error }) => {
-      if (error) {
-        console.warn("Auth session error:", error.message);
-        supabase.auth.signOut().catch(() => {});
-        setSession(null);
-      } else {
-        setSession(data?.session || null);
+    let subscription: any = null;
+
+    initRuntimeSupabase().then((client) => {
+      if (client.isFailClosed) {
+        setConfigError("正式环境数据库配置不可用，请联系管理员");
+        setLoading(false);
+        return;
       }
-      setLoading(false);
+
+      client.auth.getSession().then(({ data, error }: any) => {
+        if (error) {
+          console.warn("Auth session error:", error.message);
+          client.auth.signOut().catch(() => {});
+          setSession(null);
+        } else {
+          setSession(data?.session || null);
+        }
+        setLoading(false);
+      }).catch((err: any) => {
+        console.warn("Failed to get session:", err);
+        client.auth.signOut().catch(() => {});
+        setSession(null);
+        setLoading(false);
+      });
+
+      const res = client.auth.onAuthStateChange((_event: any, session: any) => {
+        setSession(session);
+      });
+      subscription = res?.data?.subscription;
     }).catch(err => {
-      console.warn("Failed to get session:", err);
-      supabase.auth.signOut().catch(() => {});
-      setSession(null);
+      console.error("Supabase init error:", err);
+      setConfigError("正式环境数据库配置不可用，请联系管理员");
       setLoading(false);
     });
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
-
-    return () => subscription.unsubscribe();
+    return () => {
+      if (subscription && typeof subscription.unsubscribe === 'function') {
+        subscription.unsubscribe();
+      }
+    };
   }, []);
 
-  if (loading) return <div className="min-h-screen bg-stone-100 flex items-center justify-center p-4">Loading...</div>;
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-stone-100 flex items-center justify-center p-4">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-stone-800 mx-auto mb-4"></div>
+          <p className="text-stone-600 font-bold text-sm">正在连接数据服务...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (configError) {
+    return (
+      <div className="min-h-screen bg-stone-100 flex items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-md max-w-md text-center space-y-4">
+          <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto text-xl font-bold">!</div>
+          <h2 className="text-lg font-bold text-stone-800">数据库配置不可用</h2>
+          <p className="text-stone-600 text-sm">{configError}</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!session) {
     return <Navigate to="/login" replace />;

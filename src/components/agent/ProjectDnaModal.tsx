@@ -4,7 +4,7 @@ import { ProductDnaCard } from './ProductDnaCard';
 import { PlanConfirmation } from './PlanConfirmation';
 import { RenderingQueue } from './RenderingQueue';
 import { DetailPageCanvasExport } from './DetailPageCanvasExport';
-import { X, Plus, Folder, Sparkles, Upload, FileImage, ArrowRight, CheckCircle2 } from 'lucide-react';
+import { X, Plus, Folder, Sparkles, Upload, FileImage, ArrowRight, CheckCircle2, LayoutGrid } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
@@ -34,7 +34,7 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 interface ProjectDnaModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSelectProjectAndDna?: (project: CreativeProject, dna: ProductVisualDNA) => void;
+  onSelectProjectAndDna?: (project: CreativeProject, dna: ProductVisualDNA, assets?: ProjectAsset[]) => void;
 }
 
 export const ProjectDnaModal: React.FC<ProjectDnaModalProps> = ({
@@ -241,7 +241,7 @@ export const ProjectDnaModal: React.FC<ProjectDnaModalProps> = ({
     if (data.success) {
       setProductDna(data.productDna);
       if (onSelectProjectAndDna) {
-        onSelectProjectAndDna(activeProject, data.productDna);
+        onSelectProjectAndDna(activeProject, data.productDna, assets);
       }
       // Auto trigger agent run plan creation
       await triggerAgentRunPlan(activeProject.id);
@@ -515,14 +515,23 @@ export const ProjectDnaModal: React.FC<ProjectDnaModalProps> = ({
                     <p className="text-xs text-stone-500">上传多视角产品图，AI 自动提炼不可篡改的产品视觉 DNA</p>
                   </div>
 
-                  {productDna?.confirmed_at && (
-                    <button
-                      onClick={() => onSelectProjectAndDna && onSelectProjectAndDna(activeProject, productDna)}
-                      className="bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs px-4 py-2 rounded-lg flex items-center gap-1.5 shadow"
+                  <div className="flex items-center gap-2">
+                    <a
+                      href={`/creative-canvas/${activeProject.id}`}
+                      className="bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 shadow"
                     >
-                      进入 9 屏策划 <ArrowRight className="w-4 h-4" />
-                    </button>
-                  )}
+                      <LayoutGrid className="w-3.5 h-3.5" /> 打开项目视觉画布
+                    </a>
+
+                    {productDna?.confirmed_at && (
+                      <button
+                        onClick={() => onSelectProjectAndDna && onSelectProjectAndDna(activeProject, productDna, assets)}
+                        className="bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs px-4 py-2 rounded-lg flex items-center gap-1.5 shadow"
+                      >
+                        进入 9 屏策划 <ArrowRight className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Upload Photos section */}

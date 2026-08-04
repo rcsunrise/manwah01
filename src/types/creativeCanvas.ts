@@ -21,12 +21,17 @@ export interface WelcomeNodeData extends Record<string, unknown> {
 }
 
 export interface ProductImageNodeData extends Record<string, unknown> {
-  imageUrl: string;
+  imageUrl?: string;
   fileName?: string;
   mimeType?: string;
-  uploadedAt: string;
+  fileSize?: string;
+  uploadedAt?: string;
   dimensions?: { width: number; height: number };
+  status?: 'idle' | 'uploading' | 'analyzing' | 'completed' | 'error';
+  errorMsg?: string;
   onReanalyze?: () => void;
+  onUpload?: (file: File) => void;
+  onRemove?: () => void;
 }
 
 export interface ProductDnaNodeData extends Record<string, unknown> {
@@ -34,7 +39,13 @@ export interface ProductDnaNodeData extends Record<string, unknown> {
   status: 'analyzing' | 'completed' | 'error';
   errorMsg?: string;
   analyzedAt?: string;
+  productDnaId?: string;
+  dnaCode?: string;
+  productDnaVersionId?: string;
+  versionCode?: string;
+  versions?: Array<{ id: string; version_code: string; version_number: number; created_at?: string }>;
   onViewFullDna?: () => void;
+  onSelectDnaVersion?: (versionId: string) => void;
 }
 
 export interface SceneQueueItem {
@@ -102,6 +113,13 @@ export interface ScenePlanNodeData extends Record<string, unknown> {
   aspectRatio: string;
   status: 'planning' | 'completed' | 'error';
   errorMsg?: string;
+  assetSkuId?: string;
+  assetSkuCode?: string;
+  assetVersionId?: string;
+  assetVersionCode?: string;
+  parentVersionId?: string | null;
+  productDnaVersionId?: string;
+  productDnaVersionCode?: string;
   onViewDetail?: () => void;
   onReplanScene?: () => void;
   onGenerateImage?: () => void;
@@ -131,6 +149,13 @@ export interface GeneratedImageNodeData extends Record<string, unknown> {
   provider?: string;
   generatedAt?: string;
   version?: number;
+  assetSkuId?: string;
+  assetSkuCode?: string;
+  assetVersionId?: string;
+  assetVersionCode?: string;
+  parentVersionId?: string | null;
+  productDnaVersionId?: string;
+  productDnaVersionCode?: string;
   reviewStatus: 'pendingReview' | 'approved' | 'rejected';
   reviewFeedback?: string;
   prompt: string;
@@ -139,6 +164,7 @@ export interface GeneratedImageNodeData extends Record<string, unknown> {
   onRegenerate?: () => void;
   onApprove?: () => void;
   onReject?: (feedback: string) => void;
+  onOpenAssetVersions?: () => void;
 }
 
 export type CreativeCanvasNodeType =
@@ -246,5 +272,52 @@ export interface CanvasRevisionRecord {
   created_at?: string;
   createdBy?: string;
   created_by?: string;
+}
+
+export interface StructuredCopyContent {
+  eyebrow: string;
+  headline: string;
+  subheadline: string;
+  body: string;
+  sellingPoints: string[];
+  featureLabels: string[];
+  specs: Array<{ label: string; value: string }>;
+  cta: string;
+  disclaimer: string;
+}
+
+export interface CopySkuRecord {
+  id: string;
+  user_id?: string;
+  project_id: string;
+  canvas_id: string;
+  scene_key: string;
+  sku_code: string;
+  name: string;
+  status: 'active' | 'archived';
+  current_version_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CopyVersionRecord {
+  id: string;
+  copy_sku_id: string;
+  version_number: number;
+  version_code: string;
+  parent_version_id: string | null;
+  source_type: 'ai_generated' | 'manual_edit';
+  product_dna_version_id?: string | null;
+  asset_version_id?: string | null;
+  content_json: StructuredCopyContent;
+  content_hash?: string | null;
+  contentHash?: string | null;
+  generation_provider?: string | null;
+  generation_model?: string | null;
+  prompt_snapshot?: string | null;
+  status: 'active' | 'archived';
+  created_by?: string;
+  created_at: string;
+  isCurrent?: boolean;
 }
 

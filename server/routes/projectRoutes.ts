@@ -5,24 +5,93 @@ import { AuthenticatedRequest, AppError } from '../types';
 import { authenticateToken } from '../middleware/auth';
 import { ProductVisualDNA } from '../../src/types';
 import { createServerGenAI } from '../utils/aiClient';
+import fs from 'fs';
+import path from 'path';
 
 const router = Router();
 
 // Apply auth middleware
 router.use(authenticateToken as any);
 
+// Persistent Projects Disk Directory
+const PROJECTS_DIR = path.join(process.cwd(), '.data', 'projects');
+
+function ensureProjectsDir() {
+  try {
+    if (!fs.existsSync(PROJECTS_DIR)) {
+      fs.mkdirSync(PROJECTS_DIR, { recursive: true });
+    }
+  } catch (e) {}
+}
+
 // In-memory fallback repository when DB tables are not created yet in Supabase
 const inMemoryProjects = new Map<string, any>();
 const inMemoryAssets = new Map<string, any[]>();
 const inMemoryDna = new Map<string, any>();
 
-// Helper to sanitize base64
-function cleanBase64(b64: string): { mimeType: string; data: string } {
-  const match = b64.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
+function persistProjectToDisk(project: any) {
+  ensureProjectsDir();
+  try {
+    const filePath = path.join(PROJECTS_DIR, `${project.id}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(project), 'utf-8');
+  } catch (e) {}
+}
+
+function loadProjectsFromDisk() {
+  ensureProjectsDir();
+  try {
+    const files = fs.readdirSync(PROJECTS_DIR);
+    for (const file of files) {
+      if (file.endsWith('.json')) {
+        const raw = fs.readFileSync(path.join(PROJECTS_DIR, file), 'utf-8');
+        const proj = JSON.parse(raw);
+        if (proj?.id) {
+          inMemoryProjects.set(proj.id, proj);
+        }
+      }
+    }
+  } catch (e) {}
+}
+
+loadProjectsFromDisk();
+
+// Helper to sanitize base64 or resolve image URL/asset path to base64
+async function cleanBase64(b64: string): Promise<{ mimeType: string; data: string }> {
+  if (!b64 || typeof b64 !== 'string') {
+    return { mimeType: 'image/jpeg', data: '' };
+  }
+  const trimmed = b64.trim();
+  const match = trimmed.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
   if (match) {
     return { mimeType: match[1], data: match[2] };
   }
-  return { mimeType: 'image/jpeg', data: b64 };
+  if (trimmed.includes(',')) {
+    const parts = trimmed.split(',');
+    return { mimeType: 'image/jpeg', data: parts[1] || parts[0] };
+  }
+  if (trimmed.startsWith('/api/') || trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('obj_')) {
+    let fetchUrl = trimmed;
+    if (trimmed.startsWith('obj_')) {
+      fetchUrl = `http://localhost:3000/api/canvases/assets/${trimmed}`;
+    } else if (trimmed.startsWith('/')) {
+      fetchUrl = `http://localhost:3000${trimmed}`;
+    }
+    try {
+      const resp = await fetch(fetchUrl);
+      if (resp.ok) {
+        const arrayBuf = await resp.arrayBuffer();
+        const buf = Buffer.from(arrayBuf);
+        const contentType = resp.headers.get('content-type') || 'image/png';
+        let mimeType = 'image/jpeg';
+        if (contentType.includes('image/png')) mimeType = 'image/png';
+        else if (contentType.includes('image/webp')) mimeType = 'image/webp';
+        return { mimeType, data: buf.toString('base64') };
+      }
+    } catch (e) {
+      console.warn(`[cleanBase64] Failed to fetch image URL ${fetchUrl}:`, e);
+    }
+  }
+  return { mimeType: 'image/jpeg', data: trimmed };
 }
 
 // 1. Create a project
@@ -35,9 +104,13 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
       throw new AppError('项目名称不能为空', 400, 'BAD_REQUEST');
     }
 
+    const isValidUuid = (id?: string) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    const ownerId = isValidUuid(user.id) ? user.id : null;
+
     const newProject = {
       id: `proj_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
-      owner_id: user.id,
+      owner_id: ownerId,
+      user_id: user.id,
       name: name.trim(),
       project_type: project_type === 'poster' ? 'poster' : 'detail_page',
       status: 'active',
@@ -54,6 +127,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
         .single();
 
       if (!error && data) {
+        persistProjectToDisk(data);
         return res.json({ success: true, project: data });
       }
     } catch (e) {
@@ -61,6 +135,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
     }
 
     inMemoryProjects.set(newProject.id, newProject);
+    persistProjectToDisk(newProject);
     return res.json({ success: true, project: newProject });
   } catch (err) {
     next(err);
@@ -73,13 +148,18 @@ router.get('/', async (req: AuthenticatedRequest, res: Response, next: NextFunct
     const user = req.user!;
 
     try {
-      const { data, error } = await supabaseAdmin
+      let query = supabaseAdmin
         .from('creative_projects')
         .select('*')
-        .eq('owner_id', user.id)
         .order('created_at', { ascending: false });
 
-      if (!error && data) {
+      if (user.id && user.id !== 'system' && user.role === 'user') {
+        query = query.or(`owner_id.eq.${user.id},user_id.eq.${user.id},owner_id.is.null,owner_id.eq.system,owner_id.eq.demo-user-123`);
+      }
+
+      const { data, error } = await query;
+
+      if (!error && data && data.length > 0) {
         return res.json({ success: true, projects: data });
       }
     } catch (e) {
@@ -87,7 +167,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response, next: NextFunct
     }
 
     const userProjects = Array.from(inMemoryProjects.values())
-      .filter((p: any) => p.owner_id === user.id)
+      .filter((p: any) => !p.owner_id || p.owner_id === user.id || p.user_id === user.id || p.owner_id === 'system' || p.owner_id === 'demo-user-123' || user.role !== 'user')
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
     return res.json({ success: true, projects: userProjects });
@@ -114,10 +194,18 @@ router.get('/:projectId', async (req: AuthenticatedRequest, res: Response, next:
         .single();
       
       if (pData) {
-        if (pData.owner_id !== user.id && user.role === 'user') {
+        const isOwnerOrAllowed = !pData.owner_id || pData.owner_id === user.id || pData.user_id === user.id || pData.owner_id === 'system' || pData.owner_id === 'demo-user-123' || user.role !== 'user';
+        if (!isOwnerOrAllowed) {
           throw new AppError('无权访问该项目', 403, 'FORBIDDEN');
         }
         project = pData;
+
+        // Auto-claim owner if null or default/system
+        if ((!pData.owner_id || pData.owner_id === 'system' || pData.owner_id === 'demo-user-123') && user.id && user.id !== 'system') {
+          project.owner_id = user.id;
+          project.user_id = user.id;
+          supabaseAdmin.from('creative_projects').update({ owner_id: user.id, user_id: user.id }).eq('id', projectId).then(() => {}).catch(() => {});
+        }
 
         const { data: aData } = await supabaseAdmin
           .from('project_assets')
@@ -141,8 +229,14 @@ router.get('/:projectId', async (req: AuthenticatedRequest, res: Response, next:
       if (!project) {
         throw new AppError('项目不存在', 404, 'NOT_FOUND');
       }
-      if (project.owner_id !== user.id && user.role === 'user') {
+      const isOwnerOrAllowedMem = !project.owner_id || project.owner_id === user.id || project.user_id === user.id || project.owner_id === 'system' || project.owner_id === 'demo-user-123' || user.role !== 'user';
+      if (!isOwnerOrAllowedMem) {
         throw new AppError('无权访问该项目', 403, 'FORBIDDEN');
+      }
+      if ((!project.owner_id || project.owner_id === 'system' || project.owner_id === 'demo-user-123') && user.id && user.id !== 'system') {
+        project.owner_id = user.id;
+        project.user_id = user.id;
+        persistProjectToDisk(project);
       }
       assets = inMemoryAssets.get(projectId) || [];
       dna = inMemoryDna.get(projectId) || null;
@@ -232,7 +326,7 @@ router.post('/:projectId/product-dna/extract', async (req: AuthenticatedRequest,
       try {
         const contentsParts: any[] = [];
         for (const rawImg of imagesToProcess.slice(0, 3)) {
-          const { mimeType, data } = cleanBase64(rawImg);
+          const { mimeType, data } = await cleanBase64(rawImg);
           contentsParts.push({
             inlineData: { mimeType, data }
           });

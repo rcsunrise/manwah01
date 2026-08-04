@@ -9,7 +9,9 @@ import {
   ThumbsUp,
   ThumbsDown,
   Sparkles,
-  Eye
+  Eye,
+  Layers,
+  ShieldCheck
 } from 'lucide-react';
 import { GeneratedImageNodeData } from '../../types/creativeCanvas';
 
@@ -19,6 +21,7 @@ interface GeneratedImageNodeProps {
 }
 
 export const GeneratedImageNode: React.FC<GeneratedImageNodeProps> = ({ data, selected }) => {
+  const [imgError, setImgError] = React.useState(false);
   const {
     sceneIndex,
     screenTitle,
@@ -28,10 +31,13 @@ export const GeneratedImageNode: React.FC<GeneratedImageNodeProps> = ({ data, se
     model = 'google/gemini-3-pro-image-preview',
     generatedAt,
     version = 1,
+    assetSkuCode,
+    assetVersionCode,
     reviewStatus = 'pendingReview',
     onViewDetail,
     onApprove,
-    onReject
+    onReject,
+    onOpenAssetVersions
   } = data;
 
   const getReviewBadge = () => {
@@ -58,6 +64,8 @@ export const GeneratedImageNode: React.FC<GeneratedImageNodeProps> = ({ data, se
     }
   };
 
+  const displayVersionCode = assetVersionCode || `V00${version}`;
+
   return (
     <div
       className={`w-[260px] bg-white rounded-2xl border transition-all duration-200 shadow-sm hover:shadow-md select-none overflow-hidden ${
@@ -73,43 +81,64 @@ export const GeneratedImageNode: React.FC<GeneratedImageNodeProps> = ({ data, se
 
       {/* Header */}
       <div className="p-3 border-b border-[#E5E0D8]/60 bg-[#FAF8F5] flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center justify-center font-bold text-xs">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-6 h-6 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center justify-center font-bold text-xs flex-shrink-0">
             #{sceneIndex}
           </div>
-          <span className="font-bold text-xs text-[#2C2A29] truncate max-w-[100px]">
-            渲染结果 v{version}
-          </span>
+          <div className="flex flex-col min-w-0">
+            <div className="flex items-center gap-1 font-bold text-xs text-[#2C2A29] truncate">
+              <span>渲染结果</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded font-mono bg-[#B28C5A] text-white">
+                {displayVersionCode}
+              </span>
+            </div>
+            {assetSkuCode && (
+              <span className="text-[9px] text-stone-400 font-mono truncate" title={assetSkuCode}>
+                {assetSkuCode}
+              </span>
+            )}
+          </div>
         </div>
         {getReviewBadge()}
       </div>
 
       {/* Image Preview Container */}
       <div className="relative w-full aspect-[3/4] bg-stone-100 overflow-hidden group">
-        <img
-          src={imageUrl}
-          alt={`分镜 #${sceneIndex} ${screenTitle}`}
-          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-          referrerPolicy="no-referrer"
-        />
+        {!imgError && imageUrl ? (
+          <img
+            src={imageUrl}
+            alt={`分镜 #${sceneIndex} ${screenTitle}`}
+            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+            referrerPolicy="no-referrer"
+            onError={() => setImgError(true)}
+          />
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center p-4 bg-stone-100 text-stone-400 text-center">
+            <Sparkles className="w-8 h-8 mb-2 text-[#B28C5A]/40 animate-pulse" />
+            <span className="text-xs font-medium text-stone-500">图片资源加载中或已更新</span>
+            <span className="text-[10px] text-stone-400 mt-1">请重试或重新生成分镜渲染</span>
+          </div>
+        )}
         
         {/* Hover Overlay */}
         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
           <button
             onClick={(e) => {
               e.stopPropagation();
-              if (onViewDetail) onViewDetail();
+              if (onOpenAssetVersions) onOpenAssetVersions();
+              else if (onViewDetail) onViewDetail();
             }}
             className="p-2 bg-white/90 text-[#2C2A29] rounded-xl hover:bg-white text-xs font-bold flex items-center gap-1 shadow-md transition-transform active:scale-95"
           >
-            <Maximize2 className="w-3.5 h-3.5" />
-            <span>调阅大图</span>
+            <Layers className="w-3.5 h-3.5 text-[#B28C5A]" />
+            <span>版本管理</span>
           </button>
         </div>
 
         {/* Resolution tag */}
-        <div className="absolute bottom-2 left-2 bg-black/60 backdrop-blur-md text-white text-[9px] px-2 py-0.5 rounded-full font-mono">
-          {aspectRatio} · {dimensions}
+        <div className="absolute bottom-2 left-2 bg-black/60 backdrop-blur-md text-white text-[9px] px-2 py-0.5 rounded-full font-mono flex items-center gap-1">
+          <ShieldCheck className="w-2.5 h-2.5 text-emerald-400" />
+          <span>cloud_saved · {aspectRatio}</span>
         </div>
       </div>
 
@@ -119,7 +148,19 @@ export const GeneratedImageNode: React.FC<GeneratedImageNodeProps> = ({ data, se
           <span className="truncate max-w-[130px] font-medium" title={screenTitle}>
             {screenTitle}
           </span>
-          <span>{generatedAt || '刚刚'}</span>
+          <div className="flex items-center gap-1 font-mono">
+            {data.productDnaVersionCode && (
+              <span className="text-[9px] text-[#8C6F43] bg-[#B28C5A]/10 px-1 py-0.2 rounded border border-[#B28C5A]/20 font-bold" title={`Bound DNA Version: ${data.productDnaVersionId || ''}`}>
+                {data.productDnaVersionCode}
+              </span>
+            )}
+            {data.parentVersionId && (
+              <span className="text-[9px] text-amber-700 bg-amber-50 px-1 py-0.2 rounded border border-amber-200" title={`Parent Version ID: ${data.parentVersionId}`}>
+                P:{data.parentVersionId.slice(-4)}
+              </span>
+            )}
+            <span>{generatedAt || '刚刚'}</span>
+          </div>
         </div>
 
         <div className="flex items-center gap-1.5 pt-1 border-t border-[#E5E0D8]/40">
@@ -141,12 +182,13 @@ export const GeneratedImageNode: React.FC<GeneratedImageNodeProps> = ({ data, se
           <button
             onClick={(e) => {
               e.stopPropagation();
-              if (onViewDetail) onViewDetail();
+              if (onOpenAssetVersions) onOpenAssetVersions();
+              else if (onViewDetail) onViewDetail();
             }}
             className="py-1 px-2.5 rounded-lg text-[10px] font-bold bg-white hover:bg-stone-50 text-stone-700 border border-[#E5E0D8] flex items-center gap-1"
           >
-            <Eye className="w-3 h-3 text-[#B28C5A]" />
-            <span>详情</span>
+            <Layers className="w-3 h-3 text-[#B28C5A]" />
+            <span>{displayVersionCode} 资产</span>
           </button>
         </div>
       </div>

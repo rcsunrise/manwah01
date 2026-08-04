@@ -10,6 +10,9 @@ import adminRoutes from './server/routes/adminRoutes';
 import projectRoutes from './server/routes/projectRoutes';
 import agentRoutes from './server/routes/agentRoutes';
 import canvasRoutes from './server/routes/canvasRoutes';
+import assetRoutes from './server/routes/assetRoutes';
+import productDnaRoutes from './server/routes/productDnaRoutes';
+import copyRoutes from './server/routes/copyRoutes';
 
 function fileLog(msg: string) {
   try { fs.appendFileSync('debug.log', msg + '\n'); } catch (e) {}
@@ -275,6 +278,68 @@ async function getGlobalApiConfig() {
   return null;
 }
 
+async function getFallbackConfig(deptId?: string | null, method1Key?: string) {
+  const isKeyValid = (k: string | undefined) => Boolean(k && !k.includes('在这里填入') && !k.includes('placeholder') && !k.startsWith('dummy') && k.trim() !== '');
+
+  // 1. Explicit method1Key passed from department config (Hybrid Mode)
+  if (method1Key && isKeyValid(method1Key)) {
+    return { apiKey: method1Key, provider: 'routerhub', baseUrl: 'https://api.routerhub.ai/v1beta' };
+  }
+
+  // 2. process.env.ROUTERHUB_API_KEY
+  if (isKeyValid(process.env.ROUTERHUB_API_KEY)) {
+    return { apiKey: process.env.ROUTERHUB_API_KEY!, provider: 'routerhub', baseUrl: 'https://api.routerhub.ai/v1beta' };
+  }
+
+  // 3. User department's method1_key or non-vectorengine api_key
+  if (deptId) {
+    try {
+      const { data: deptConfig } = await supabaseAdmin
+        .from('department_configs')
+        .select('method1_key, api_key, api_base_url')
+        .eq('dept_id', deptId)
+        .maybeSingle();
+
+      if (deptConfig?.method1_key && isKeyValid(deptConfig.method1_key)) {
+        return { apiKey: deptConfig.method1_key, provider: 'routerhub', baseUrl: 'https://api.routerhub.ai/v1beta' };
+      }
+      if (deptConfig?.api_key && isKeyValid(deptConfig.api_key) && !(deptConfig.api_base_url || '').includes('vectorengine')) {
+        return { apiKey: deptConfig.api_key, provider: 'routerhub', baseUrl: deptConfig.api_base_url || 'https://api.routerhub.ai/v1beta' };
+      }
+    } catch (e) {
+      console.warn('Error checking dept fallback config:', e);
+    }
+  }
+
+  // 4. Global system department config
+  try {
+    const { data: globalDept } = await supabaseAdmin
+      .from('department_configs')
+      .select('method1_key, api_key, api_base_url')
+      .eq('dept_name', '全站系统')
+      .maybeSingle();
+
+    if (globalDept?.method1_key && isKeyValid(globalDept.method1_key)) {
+      return { apiKey: globalDept.method1_key, provider: 'routerhub', baseUrl: 'https://api.routerhub.ai/v1beta' };
+    }
+    if (globalDept?.api_key && isKeyValid(globalDept.api_key) && !(globalDept.api_base_url || '').includes('vectorengine')) {
+      return { apiKey: globalDept.api_key, provider: 'routerhub', baseUrl: globalDept.api_base_url || 'https://api.routerhub.ai/v1beta' };
+    }
+  } catch (e) {
+    console.warn('Error checking global fallback config:', e);
+  }
+
+  // 5. GEMINI_API_KEY or API_KEY
+  if (isKeyValid(process.env.GEMINI_API_KEY)) {
+    return { apiKey: process.env.GEMINI_API_KEY!, provider: 'google', baseUrl: 'https://generativelanguage.googleapis.com/v1beta' };
+  }
+  if (isKeyValid(process.env.API_KEY)) {
+    return { apiKey: process.env.API_KEY!, provider: 'google', baseUrl: 'https://generativelanguage.googleapis.com/v1beta' };
+  }
+
+  return null;
+}
+
 async function resolveApiConfig(userUuid: string) {
   let apiKey = process.env.ROUTERHUB_API_KEY;
   let baseUrl = "https://api.routerhub.ai/v1beta";
@@ -334,11 +399,45 @@ async function startServer() {
   app.use(express.urlencoded({ limit: '500mb', extended: true }));
   app.use(authenticateRequest);
 
+  // Runtime Config Endpoint for client-side Supabase initialization
+  app.get('/api/runtime-config', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+    const anonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+
+    const isPlaceholder = (val: string | undefined) => !val || val.includes('在这里填入') || val.includes('placeholder');
+    const isConfigured = !isPlaceholder(url) && !isPlaceholder(anonKey);
+
+    let projectRef = '';
+    if (url) {
+      try {
+        const match = url.match(/https?:\/\/([^.]+)\.supabase/);
+        if (match && match[1]) {
+          projectRef = match[1];
+        }
+      } catch (e) {}
+    }
+
+    res.json({
+      supabaseUrl: isConfigured ? url : '',
+      supabaseAnonKey: isConfigured ? anonKey : '',
+      configured: isConfigured,
+      projectRef,
+      storageMedium: isConfigured ? 'supabase_db' : 'in_memory'
+    });
+  });
+
   // Mount modular API routers
   app.use('/api/admin', adminRoutes);
   app.use('/api/projects', projectRoutes);
   app.use('/api/agent', agentRoutes);
   app.use('/api/canvases', canvasRoutes);
+  app.use('/api/asset-skus', assetRoutes);
+  app.use('/api/asset-versions', assetRoutes);
+  app.use('/api/product-dnas', productDnaRoutes);
+  app.use('/api/product-dna-versions', productDnaRoutes);
+  app.use('/api', productDnaRoutes);
+  app.use('/api', assetRoutes);
 
   // API Route for uploading mask and clean image
   app.post('/api/pre_process/mask', upload.fields([{ name: 'clean_image', maxCount: 1 }, { name: 'mask_image', maxCount: 1 }]), async (req, res) => {
@@ -471,6 +570,62 @@ async function startServer() {
     }
   });
 
+  // Helper to resolve raw data, data URLs, asset URLs, or object keys to clean base64 and mimeType
+  async function resolveImageToBase64(rawData: string): Promise<{ cleanB64: string; mimeType: string }> {
+    if (!rawData || typeof rawData !== 'string') {
+      return { cleanB64: '', mimeType: 'image/jpeg' };
+    }
+
+    const trimmed = rawData.trim();
+
+    // 1. Data URL format: data:image/png;base64,iVBORw...
+    if (trimmed.startsWith('data:')) {
+      const splitParts = trimmed.split(',');
+      const header = splitParts[0];
+      const cleanB64 = splitParts[1] || '';
+      let mimeType = 'image/jpeg';
+      if (header.includes('image/png')) mimeType = 'image/png';
+      else if (header.includes('image/webp')) mimeType = 'image/webp';
+      else if (header.includes('image/jpeg') || header.includes('image/jpg')) mimeType = 'image/jpeg';
+      return { cleanB64, mimeType };
+    }
+
+    // 2. Comma separated base64
+    if (trimmed.includes(',')) {
+      const parts = trimmed.split(',');
+      return { cleanB64: parts[1] || parts[0], mimeType: 'image/jpeg' };
+    }
+
+    // 3. Asset URL or key (/api/canvases/assets/obj_... or http(s)://... or obj_...)
+    if (trimmed.startsWith('/api/') || trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('obj_')) {
+      let fetchUrl = trimmed;
+      if (trimmed.startsWith('obj_')) {
+        fetchUrl = `http://localhost:3000/api/canvases/assets/${trimmed}`;
+      } else if (trimmed.startsWith('/')) {
+        fetchUrl = `http://localhost:3000${trimmed}`;
+      }
+
+      try {
+        const resp = await fetch(fetchUrl);
+        if (resp.ok) {
+          const arrayBuf = await resp.arrayBuffer();
+          const buf = Buffer.from(arrayBuf);
+          const contentType = resp.headers.get('content-type') || 'image/png';
+          let mimeType = 'image/jpeg';
+          if (contentType.includes('image/png')) mimeType = 'image/png';
+          else if (contentType.includes('image/webp')) mimeType = 'image/webp';
+          else if (contentType.includes('image/jpeg') || contentType.includes('image/jpg')) mimeType = 'image/jpeg';
+          return { cleanB64: buf.toString('base64'), mimeType };
+        }
+      } catch (err: any) {
+        console.warn(`[resolveImageToBase64] Warning fetching asset from ${fetchUrl}:`, err?.message);
+      }
+    }
+
+    // 4. Fallback: treat as raw base64 string
+    return { cleanB64: trimmed, mimeType: 'image/jpeg' };
+  }
+
   // API Route to proxy to API Gateway
   // Endpoint: /api/gateway/generate-image
   app.post('/api/gateway/generate-image', async (req, res) => {
@@ -542,15 +697,18 @@ async function startServer() {
       }
 
       // If Auto mode, attempt to extract dimensions from the first reference image (Window 1)
-      if (originalAspectRatio === 'Auto' && images && images.length > 0 && images[0]?.data) {
+      if (originalAspectRatio === 'Auto' && images && images.length > 0) {
         try {
-          const cleanB64 = images[0].data.includes(',') ? images[0].data.split(',')[1] : images[0].data;
-          const firstImgBuffer = Buffer.from(cleanB64, 'base64');
-          const meta = await sharp(firstImgBuffer).metadata();
-          if (meta.width && meta.height) {
-            targetWidth = meta.width;
-            targetHeight = meta.height;
-            console.log(`[Auto Aspect Ratio] Automatically detected reference image dimension: ${targetWidth}x${targetHeight}`);
+          const rawData0 = typeof images[0] === 'string' ? images[0] : (images[0]?.data || images[0]?.base64Data || images[0]?.url || '');
+          const { cleanB64 } = await resolveImageToBase64(rawData0);
+          if (cleanB64) {
+            const firstImgBuffer = Buffer.from(cleanB64, 'base64');
+            const meta = await sharp(firstImgBuffer).metadata();
+            if (meta.width && meta.height) {
+              targetWidth = meta.width;
+              targetHeight = meta.height;
+              console.log(`[Auto Aspect Ratio] Automatically detected reference image dimension: ${targetWidth}x${targetHeight}`);
+            }
           }
         } catch (metaErr) {
           console.error("Failed to extract metadata from reference image:", metaErr);
@@ -641,8 +799,11 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
              userPrompt = prompt.replace('[SYSTEM_TRIGGER:LINEART_TRANSFORM]', '').trim();
           }
 
-          const stage1Url = `${baseUrl.replace(/\/+$/, '')}/models/gemini-3.1-pro-preview:generateContent${provider === 'google' ? `?key=${apiKey}` : ''}`;
+          const stage1Url = `${baseUrl.replace(/\/+$/, '')}/models/gemini-2.5-flash:generateContent${provider === 'google' ? `?key=${apiKey}` : ''}`;
           
+          const rawStage1Data = images[0]?.data || images[0]?.base64Data || images[0]?.url || '';
+          const { cleanB64: cleanStage1B64, mimeType: stage1Mime } = await resolveImageToBase64(rawStage1Data);
+
           const stage1Payload = {
             systemInstruction: {
               parts: [{ text: stage1Instruction }]
@@ -653,8 +814,8 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
                 parts: [
                   {
                     inlineData: {
-                      mimeType: images[0].mimeType,
-                      data: images[0].data
+                      mimeType: stage1Mime,
+                      data: cleanStage1B64
                     }
                   },
                   { text: userPrompt }
@@ -721,43 +882,52 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
       const parts = [];
       if (images && images.length > 0) {
         for (const img of images) {
-          parts.push({
-            inlineData: {
-              mimeType: img.mimeType,
-              data: img.data
-            }
-          });
+          const rawData = typeof img === 'string' ? img : (img.data || img.base64Data || img.url || '');
+          if (!rawData) continue;
+          const { cleanB64, mimeType } = await resolveImageToBase64(rawData);
+
+          if (cleanB64) {
+            parts.push({
+              inlineData: {
+                mimeType: mimeType,
+                data: cleanB64
+              }
+            });
+          }
         }
       }
       parts.push({ text: prompt });
 
-      const generationConfig: any = {
-        outputFormat: "image/jpeg",
-        // Pass standard aspect ratios or handle as needed
-      };
+      const generationConfig: any = {};
+      const imageConfig: any = {};
 
-      // Not all models support all parameters, but try to pass them safely
-      generationConfig.imageConfig = {};
       if (aspectRatio && aspectRatio !== 'Auto') {
-        generationConfig.imageConfig.aspectRatio = aspectRatio;
-      }
-      
-      if (seed !== undefined) {
-         generationConfig.seed = seed;
+        imageConfig.aspectRatio = aspectRatio;
       }
       if (['512px', '1K', '2K', '4K'].includes(resolution)) {
-         generationConfig.imageConfig.imageSize = resolution;
+        imageConfig.imageSize = resolution;
       }
 
-      const payload = {
+      if (Object.keys(imageConfig).length > 0) {
+        generationConfig.imageConfig = imageConfig;
+      }
+
+      if (seed !== undefined && seed !== null && !isNaN(Number(seed))) {
+        generationConfig.seed = Number(seed);
+      }
+
+      const payload: any = {
         contents: [
           {
             role: "user",
             parts: parts
           }
-        ],
-        generationConfig: generationConfig
+        ]
       };
+
+      if (Object.keys(generationConfig).length > 0) {
+        payload.generationConfig = generationConfig;
+      }
 
       const headers: any = { 
         "Content-Type": "application/json",
@@ -781,38 +951,57 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
           cleanModel = cleanModel.replace("openai/", "");
         }
 
+        // Map legacy/preview model names to official production model names if needed
+        let preferredModel = cleanModel;
+        if (cleanModel === 'gemini-3.1-flash-image-preview' || cleanModel === 'gemini-3.1-flash-image') {
+          preferredModel = 'gemini-2.5-flash-image';
+        } else if (cleanModel === 'gemini-3-pro-image-preview' || cleanModel === 'gemini-3-pro-image') {
+          preferredModel = 'imagen-3.0-generate-002';
+        }
+
         // Construct prioritized candidate models array
-        const candidateModels: string[] = [firstModelOption, cleanModel];
+        const candidateModels: string[] = [preferredModel, firstModelOption, cleanModel];
 
         if (cleanModel === 'gpt-image-2' || firstModelOption.includes('gpt-image-2')) {
           candidateModels.length = 0;
-          candidateModels.push('gpt-image-2');
+          if (currentProvider === 'google' || currentBaseUrl.includes('googleapis.com')) {
+            candidateModels.push('imagen-3.0-generate-002');
+            candidateModels.push('gemini-2.5-flash-image');
+          } else {
+            candidateModels.push('gpt-image-2');
+            candidateModels.push('imagen-3.0-generate-002');
+            candidateModels.push('gemini-2.5-flash-image');
+          }
         } else if (cleanModel.includes('3-pro') || cleanModel.includes('pro')) {
           candidateModels.push('imagen-3.0-generate-002');
-          candidateModels.push('gemini-3.1-flash-image-preview');
-          candidateModels.push('gemini-3.1-flash-image');
           candidateModels.push('gemini-2.5-flash-image');
           candidateModels.push('imagen-3.0-fast-generate-001');
-          candidateModels.push('gpt-image-1');
         } else if (cleanModel.includes('flash')) {
-          candidateModels.push('gemini-3.1-flash-image-preview');
-          candidateModels.push('gemini-3.1-flash-image');
           candidateModels.push('gemini-2.5-flash-image');
           candidateModels.push('imagen-3.0-generate-002');
           candidateModels.push('imagen-3.0-fast-generate-001');
-          candidateModels.push('gpt-image-1');
         } else if (cleanModel.includes('gpt-image')) {
-          candidateModels.push('gpt-image-2');
-          candidateModels.push('gpt-image-1.5');
-          candidateModels.push('gpt-image-1');
+          if (currentProvider === 'google' || currentBaseUrl.includes('googleapis.com')) {
+            candidateModels.push('imagen-3.0-generate-002');
+            candidateModels.push('gemini-2.5-flash-image');
+          } else {
+            candidateModels.push('gpt-image-2');
+            candidateModels.push('gpt-image-1.5');
+            candidateModels.push('gpt-image-1');
+          }
         } else {
           candidateModels.push('imagen-3.0-generate-002');
-          candidateModels.push('gemini-3.1-flash-image-preview');
           candidateModels.push('gemini-2.5-flash-image');
-          candidateModels.push('gpt-image-1');
+          candidateModels.push('imagen-3.0-fast-generate-001');
         }
 
-        const uniqueCandidates = Array.from(new Set(candidateModels));
+        let uniqueCandidates = Array.from(new Set(candidateModels));
+        if (currentProvider === 'google' || currentBaseUrl.includes('googleapis.com')) {
+          uniqueCandidates = uniqueCandidates.filter(m => !m.toLowerCase().includes('gpt-image'));
+          if (uniqueCandidates.length === 0) {
+            uniqueCandidates = ['imagen-3.0-generate-002', 'gemini-2.5-flash-image'];
+          }
+        }
 
         const executeRequestForModel = async (tgtModel: string) => {
           let finalModel = tgtModel;
@@ -833,27 +1022,6 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
           if (isOpenAI) {
             let baseForOpenAI = currentBaseUrl.replace(/\/v1beta\/?$/, '').replace(/\/v1\/?$/, '').replace(/\/+$/, '');
             
-            if (!images || images.length === 0 || !images[0]?.data) {
-               throw new Error("分镜图片生成必须包含产品参考图片 (reference image)");
-            }
-
-            const refImg = images[0];
-            const cleanData = refImg.data.includes(',') ? refImg.data.split(',')[1] : refImg.data;
-            if (!cleanData || cleanData.length < 50) {
-               throw new Error("产品参考图片 Base64 数据格式错误或为空");
-            }
-            const imgBuffer = Buffer.from(cleanData, 'base64');
-            if (imgBuffer.length > 50 * 1024 * 1024) {
-               throw new Error("产品参考图片大小超过 50MB 限制");
-            }
-
-            targetUrl = `${baseForOpenAI}/v1/images/edits`;
-            isMultipart = true;
-            formData = new FormData();
-            formData.append('model', 'gpt-image-2');
-            formData.append('prompt', prompt);
-            formData.append('n', "1");
-
             let sizeStr = "1536x1024";
             if (aspectRatio === '3:4' || aspectRatio === '9:16' || aspectRatio === '1:2') {
                sizeStr = "1024x1536";
@@ -862,16 +1030,43 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
             } else {
                sizeStr = "1536x1024";
             }
-            formData.append('size', sizeStr);
-            formData.append('quality', 'high');
-            formData.append('output_format', 'png');
-            formData.append('input_fidelity', 'high');
-            formData.append('background', 'auto');
 
-            const mimeType = refImg.mimeType || 'image/png';
-            const ext = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : (mimeType.includes('webp') ? 'webp' : 'png');
-            const blob = new Blob([imgBuffer], { type: mimeType });
-            formData.append('image', blob, `product_reference.${ext}`);
+            if (images && images.length > 0 && images[0]?.data) {
+              const refImg = images[0];
+              const cleanData = refImg.data.includes(',') ? refImg.data.split(',')[1] : refImg.data;
+              if (cleanData && cleanData.length >= 50) {
+                const imgBuffer = Buffer.from(cleanData, 'base64');
+                if (imgBuffer.length <= 50 * 1024 * 1024) {
+                  targetUrl = `${baseForOpenAI}/v1/images/edits`;
+                  isMultipart = true;
+                  formData = new FormData();
+                  formData.append('model', 'gpt-image-2');
+                  formData.append('prompt', prompt);
+                  formData.append('n', "1");
+                  formData.append('size', sizeStr);
+                  formData.append('quality', 'high');
+                  formData.append('output_format', 'png');
+                  formData.append('input_fidelity', 'high');
+                  formData.append('background', 'auto');
+
+                  const mimeType = refImg.mimeType || 'image/png';
+                  const ext = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : (mimeType.includes('webp') ? 'webp' : 'png');
+                  const blob = new Blob([imgBuffer], { type: mimeType });
+                  formData.append('image', blob, `product_reference.${ext}`);
+                }
+              }
+            }
+
+            if (!isMultipart) {
+              targetUrl = `${baseForOpenAI}/v1/images/generations`;
+              reqPayload = {
+                model: 'gpt-image-2',
+                prompt: prompt,
+                n: 1,
+                size: sizeStr,
+                quality: 'high'
+              };
+            }
           }
 
           if (currentProvider === "google") {
@@ -893,7 +1088,9 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
           fileLog(`[OpenAI Proxy Debug] targetUrl: ${targetUrl}, isMultipart: ${isMultipart}`);
 
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 300000);
+          const isVecEngine = currentProvider === 'vectorengine' || currentBaseUrl.includes('vectorengine');
+          const timeoutMs = isVecEngine ? 45000 : 120000;
+          const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
           let resObj;
           try {
@@ -906,7 +1103,7 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
           } catch (fetchErr: any) {
             clearTimeout(timeoutId);
             if (fetchErr.name === 'AbortError') {
-               throw new Error(`Upstream error: timeout after 150 seconds`);
+               throw new Error(`Upstream error: timeout after ${Math.round(timeoutMs / 1000)} seconds`);
             }
             throw fetchErr;
           }
@@ -939,7 +1136,7 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
           
           // Transform OpenAI response to Google format so frontend parses correctly
           if (isOpenAI) {
-             let b64Data = data.data?.[0]?.b64_json;
+             let b64Data = data.data?.[0]?.b64_json || data.data?.[0]?.b64 || data.data?.[0]?.base64 || data.data?.[0]?.image || (typeof data.data?.[0] === 'string' ? data.data[0] : undefined);
              
              if (!b64Data && data.data?.[0]?.url) {
                 try {
@@ -985,12 +1182,25 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
           } catch (err: any) {
             lastError = err;
             const errMsg = err.message || "";
-            const isModelNotFoundError = errMsg.includes("404") || 
+
+            const isKeyAuthError = errMsg.toLowerCase().includes("api key not valid") ||
+                                  errMsg.toLowerCase().includes("invalid api key") ||
+                                  errMsg.includes("UNAUTHENTICATED") ||
+                                  errMsg.includes("PERMISSION_DENIED") ||
+                                  errMsg.includes("401") ||
+                                  errMsg.includes("403");
+
+            if (isKeyAuthError) {
+              console.warn(`[Proxy candidate] Provider ${currentProvider} failed with auth/key error: ${errMsg}. Aborting remaining model candidates.`);
+              throw err;
+            }
+
+            const isModelNotFoundError = (errMsg.includes("404") || 
                                           errMsg.includes("not found") || 
                                           errMsg.includes("supported") || 
                                           errMsg.includes("Status 404") ||
-                                          errMsg.includes("400") ||
-                                          errMsg.includes("INVALID_ARGUMENT");
+                                          errMsg.includes("INVALID_ARGUMENT")) &&
+                                         !errMsg.includes("API key");
             if (isModelNotFoundError) {
               console.log(`[Proxy fallback] Model candidate "${candidate}" failed (${errMsg}). Retrying next candidate...`);
               continue;
@@ -1035,40 +1245,22 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
                                  errMsg.includes('[Status 402');
 
           if ((provider === 'vectorengine' || baseUrl.includes('vectorengine')) && shouldFallback) {
-            
-            let fallbackKey = process.env.ROUTERHUB_API_KEY;
-            
-            // Priority 1: Hybrid Mode is enabled in department config (routing_mode === 2)
-            if (routingMode === 2 && method1Key && typeof method1Key === 'string' && method1Key.trim() !== '') {
-               fallbackKey = method1Key;
-               console.log(`[O&M: Hybrid Mode Activated] VectorEngine failed, using Department Hybrid RouterHub Config...`);
-            }
-            // Priority 2: Fallback to Global RouterHub config
-            else if (!fallbackKey) {
-              const globalConfig = await getGlobalApiConfig();
-              if (globalConfig) {
-                 if (globalConfig.routingMode === 2 && globalConfig.method1Key) {
-                    fallbackKey = globalConfig.method1Key;
-                 } else if (globalConfig.apiKey && globalConfig.activeProvider === 'routerhub') {
-                    fallbackKey = globalConfig.apiKey;
-                 }
-              }
-            }
+            const fallback = await getFallbackConfig(deptId, method1Key);
 
-            if (fallbackKey && fetchResult === undefined) {
-              console.log(`[O&M: Fallback] VectorEngine failed (${errMsg}). Retrying with RouterHub fallback...`);
-              usedProvider = "routerhub";
+            if (fallback && fetchResult === undefined) {
+              console.log(`[O&M: Fallback Activated] VectorEngine failed (${errMsg}). Retrying with fallback provider ${fallback.provider} (${fallback.baseUrl})...`);
+              usedProvider = fallback.provider;
               try {
-                const fetchRes = await doFetch("https://api.routerhub.ai/v1beta", fallbackKey, "routerhub");
+                const fetchRes = await doFetch(fallback.baseUrl, fallback.apiKey, fallback.provider);
                 fetchResult = fetchRes.data;
                 actualModelUsed = fetchRes.actualModel;
               } catch (fallbackErr: any) {
-                console.error(`[O&M: Fallback Failed] RouterHub fallback also failed: ${fallbackErr.message}`);
+                console.error(`[O&M: Fallback Failed] Fallback ${fallback.provider} also failed: ${fallbackErr.message}`);
                 throw new Error(`Primary API Error: ${errMsg}. Fallback API Error: ${fallbackErr.message}`);
               }
             } else {
-              console.error(`[O&M: Fallback Skipped] VectorEngine failed but no valid RouterHub fallback key found. Msg: ${errMsg}`);
-              throw initialErr;
+              console.error(`[O&M: Fallback Skipped] VectorEngine failed (${errMsg}) and no valid fallback API key was found.`);
+              throw new Error(`VectorEngine 接口响应超时或报错 (${errMsg})。请在后台配置 RouterHub / Gemini 兜底密钥。`);
             }
           } else {
             console.error(`[O&M: Upstream Error] Provider ${provider} failed on ${baseUrl}: ${errMsg}`);
@@ -1253,10 +1445,17 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
 });
 
 
-  // Mount modular admin routes
+  // Mount modular admin and C4 routes
   app.use('/api/admin', adminRoutes);
   app.use('/api/projects', projectRoutes);
   app.use('/api/agent-runs', agentRoutes);
+  app.use('/api/canvases', canvasRoutes);
+  app.use('/api/creative-canvases', canvasRoutes);
+  app.use('/api/asset-skus', assetRoutes);
+  app.use('/api/asset-versions', assetRoutes);
+  app.use('/api/product-dnas', productDnaRoutes);
+  app.use('/api/product-dna-versions', productDnaRoutes);
+  app.use('/api', copyRoutes);
 
   app.get('/api/ai/test-connection', async (req, res) => {
     const userUuid = req.headers['x-user-uuid'] as string;
@@ -1466,9 +1665,11 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
          fetchOptions.body = JSON.stringify(req.body);
       }
 
-      // Timeout explicitly set to 150 seconds for VectorEngine as requested
+      // Timeout set to 45s for VectorEngine so it fails fast to trigger fallback, 120s for others
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 300000);
+      const isVec = provider === 'vectorengine' || (baseUrl && baseUrl.includes('vectorengine'));
+      const timeoutMs = isVec ? 45000 : 120000;
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       fetchOptions.signal = controller.signal;
 
       let response: Response;
@@ -1484,43 +1685,36 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
         }
       } catch (err: any) {
         if (provider === 'vectorengine' || baseUrl.includes('vectorengine')) {
-            let fallbackKey = process.env.ROUTERHUB_API_KEY;
+            const fallback = await getFallbackConfig(deptId, method1Key);
             
-            if (routingMode === 2 && method1Key && typeof method1Key === 'string' && method1Key.trim() !== '') {
-               fallbackKey = method1Key;
-               console.log(`[O&M: Text Hybrid Mode Activated] VectorEngine failed or timed out: ${err.message}. Retrying with Dept Hybrid RouterHub...`);
-            } else if (!fallbackKey) {
-               const globalConfig = await getGlobalApiConfig();
-               if (globalConfig) {
-                  if (globalConfig.routingMode === 2 && globalConfig.method1Key) {
-                     fallbackKey = globalConfig.method1Key;
-                  } else if (globalConfig.apiKey && globalConfig.activeProvider === 'routerhub') {
-                     fallbackKey = globalConfig.apiKey;
-                  }
+            if (fallback) {
+               usedProvider = fallback.provider;
+               console.log(`[O&M: Text Fallback Activated] Retrying with ${fallback.provider} (${fallback.baseUrl}) fallback...`);
+               
+               let fallbackUrl = `${fallback.baseUrl.replace(/\/+$/, '')}${req.originalUrl}`;
+               const fallbackHeaders: any = { ...headers };
+               
+               if (fallback.provider === 'google') {
+                 fallbackHeaders["x-goog-api-key"] = fallback.apiKey;
+                 delete fallbackHeaders["Authorization"];
+                 if (!fallbackUrl.includes('key=')) {
+                   fallbackUrl += (fallbackUrl.includes('?') ? '&' : '?') + `key=${fallback.apiKey}`;
+                 }
+               } else {
+                 fallbackHeaders["Authorization"] = `Bearer ${fallback.apiKey}`;
+                 delete fallbackHeaders["x-goog-api-key"];
                }
-            }
-            
-            if (fallbackKey) {
-               usedProvider = "routerhub";
-               console.log(`[O&M: Text Fallback] Retrying with RouterHub standard fallback...`);
-               
-               // Construct fallback RouterHub URL
-               const fallbackUrlObj = new URL(`https://api.routerhub.ai${req.originalUrl}`);
-               
-               // Replace Headers
-               const fallbackHeaders = { ...headers, "Authorization": `Bearer ${fallbackKey}` };
-               delete fallbackHeaders["x-goog-api-key"];
                
                const fbOptions: RequestInit = {
                    ...fetchOptions,
                    headers: fallbackHeaders
                };
-               delete fbOptions.signal; // Optionally remove or reset signal for fallback
+               delete fbOptions.signal;
                
-               response = await fetch(fallbackUrlObj.toString(), fbOptions);
+               response = await fetch(fallbackUrl, fbOptions);
             } else {
                clearTimeout(timeoutId);
-               throw err;
+               throw new Error(`VectorEngine 请求失败 (${err.message})，且未检测到有效的 RouterHub / Gemini 兜底 API 密钥。`);
             }
         } else {
             clearTimeout(timeoutId);

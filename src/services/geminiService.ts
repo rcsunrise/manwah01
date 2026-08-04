@@ -57,26 +57,62 @@ const API_SUPPORTED_ASPECT_RATIOS = new Set<SupportedAspectRatio>([
   '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'
 ]);
 
+export const resolveClientImageToBase64 = async (imgStr: string): Promise<string> => {
+  if (!imgStr || typeof imgStr !== 'string') return '';
+  const trimmed = imgStr.trim();
+  if (trimmed.startsWith('data:')) {
+    return trimmed.split(',')[1] || '';
+  }
+  if (trimmed.includes(',')) {
+    return trimmed.split(',')[1] || trimmed;
+  }
+  if (trimmed.startsWith('/api/') || trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('obj_')) {
+    let fetchUrl = trimmed;
+    if (trimmed.startsWith('obj_')) {
+      fetchUrl = `/api/canvases/assets/${trimmed}`;
+    }
+    try {
+      const resp = await fetch(fetchUrl);
+      if (resp.ok) {
+        const blob = await resp.blob();
+        return new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const result = (reader.result as string) || '';
+            resolve(result.includes(',') ? result.split(',')[1] : result);
+          };
+          reader.onerror = () => resolve('');
+          reader.readAsDataURL(blob);
+        });
+      }
+    } catch (e) {
+      console.warn(`[resolveClientImageToBase64] Failed to fetch ${fetchUrl}:`, e);
+    }
+  }
+  return trimmed;
+};
+
 /**
  * Helper: Compress image for faster recognition/analysis
  * Reduces dimensions to max 1024px and uses JPEG 0.7 quality.
  * This significantly improves upload speed and processing latency for the assistant.
  */
-const compressImageForAnalysis = (base64Str: string, maxWidth = 1024, quality = 0.7): Promise<string> => {
+const compressImageForAnalysis = async (base64Str: string, maxWidth = 1024, quality = 0.7): Promise<string> => {
+  const cleanB64 = await resolveClientImageToBase64(base64Str);
   return new Promise((resolve) => {
     if (typeof document === 'undefined') {
-      resolve(base64Str); // Server-side guard
+      resolve(cleanB64); // Server-side guard
       return;
     }
     const img = new Image();
-    const prefix = base64Str.startsWith('data:') ? '' : 'data:image/png;base64,';
-    img.src = `${prefix}${base64Str}`;
+    const prefix = cleanB64.startsWith('data:') ? '' : 'data:image/png;base64,';
+    img.src = `${prefix}${cleanB64}`;
     img.onload = () => {
       let { width, height } = img;
       
       // If image is already small enough, skip compression
       if (width <= maxWidth && height <= maxWidth) {
-        resolve(base64Str);
+        resolve(cleanB64);
         return;
       }
 
@@ -98,7 +134,7 @@ const compressImageForAnalysis = (base64Str: string, maxWidth = 1024, quality = 
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       if (!ctx) {
-        resolve(base64Str);
+        resolve(cleanB64);
         return;
       }
       
@@ -109,7 +145,7 @@ const compressImageForAnalysis = (base64Str: string, maxWidth = 1024, quality = 
       const dataUrl = canvas.toDataURL('image/jpeg', quality);
       resolve(dataUrl.split(',')[1]);
     };
-    img.onerror = () => resolve(base64Str);
+    img.onerror = () => resolve(cleanB64);
   });
 };
 
@@ -335,10 +371,10 @@ export const generateEditedImage = async (
 
   // Map UI model selection to SDK model names
   let modelName: string = modelType;
-  if (modelType === 'gemini-3-pro' || modelType === 'gemini-2.5-pro' || modelType === 'google/gemini-3-pro-image-preview') {
-    modelName = 'gemini-3-pro-image-preview';
-  } else if (modelType === 'gemini-3-flash' || modelType === 'gemini-2.5-flash') {
-    modelName = 'gemini-3.1-flash-image-preview';
+  if (modelType === 'gemini-3-pro' || modelType === 'gemini-2.5-pro' || modelType === 'google/gemini-3-pro-image-preview' || modelType === 'google/gemini-3-pro-image' || modelType === 'gemini-3-pro-image' || modelType === 'gemini-3-pro-image-preview') {
+    modelName = 'imagen-3.0-generate-002';
+  } else if (modelType === 'gemini-3-flash' || modelType === 'gemini-2.5-flash' || modelType === 'gemini-3.1-flash-image' || modelType === 'gemini-3.1-flash-image-preview') {
+    modelName = 'gemini-2.5-flash-image';
   } else if (modelType === 'gpt-image-2' || modelType === 'openai/gpt-image-2') {
     modelName = 'gpt-image-2';
   }
@@ -396,7 +432,7 @@ export const generateEditedImage = async (
   }
 
   // Configure imageSize only for supported models
-  if (modelName.includes('image') || modelName.includes('preview') || modelName.includes('lite')) {
+  if (typeof modelName === 'string' && (modelName.includes('image') || modelName.includes('preview') || modelName.includes('lite'))) {
     if (!config.imageConfig) config.imageConfig = {};
     
     // Use the resolution passed from the UI
@@ -424,9 +460,20 @@ export const generateEditedImage = async (
         aspectRatio: aspectRatio,
         resolution: typeof resolution === 'string' && ['512px', '1K', '2K', '4K'].includes(resolution) ? resolution : '2K',
         seed: seed,
-        images: images.map(img => ({
-          mimeType: img.mimeType,
-          data: img.base64Data
+        images: await Promise.all(images.map(async img => {
+          const rawData = img.base64Data || '';
+          const cleanData = await resolveClientImageToBase64(rawData);
+          let mimeType = img.mimeType || 'image/jpeg';
+          if (rawData.startsWith('data:')) {
+            const header = rawData.split(',')[0];
+            if (header.includes('image/png')) mimeType = 'image/png';
+            else if (header.includes('image/webp')) mimeType = 'image/webp';
+            else if (header.includes('image/jpeg') || header.includes('image/jpg')) mimeType = 'image/jpeg';
+          }
+          return {
+            mimeType,
+            data: cleanData
+          };
         }))
       };
 

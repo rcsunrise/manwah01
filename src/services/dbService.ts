@@ -84,23 +84,47 @@ class DBService {
     const size = this.calculateSize(item.imageUrl) + this.calculateSize(item.prompt);
     const fullItem: HistoryItem = { ...item, size };
 
-    return new Promise((resolve, reject) => {
+    // 1. Save to local IndexedDB for immediate responsive offline cache
+    await new Promise<void>((resolve, reject) => {
       const tx = this.db!.transaction(STORE_HISTORY, 'readwrite');
       const store = tx.objectStore(STORE_HISTORY);
       store.add(fullItem);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject("Failed to save to history");
     });
+
+    // 2. Persist seamlessly to Supabase `generation_history` table
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData?.user?.id || null;
+
+      const sbRecord = {
+        id: item.id || `hist_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+        user_id: userId,
+        prompt: item.prompt,
+        image_url: item.imageUrl,
+        parameters: {
+          roleUsed: item.roleUsed,
+          model: item.model
+        },
+        size,
+        timestamp: item.timestamp || Date.now()
+      };
+
+      await supabase.from('generation_history').upsert(sbRecord);
+    } catch (e) {
+      console.warn("Supabase history save non-blocking warning:", e);
+    }
   }
 
   async getHistory(): Promise<HistoryItem[]> {
     await this.init();
-    return new Promise((resolve, reject) => {
+
+    // 1. Get local IndexedDB history items
+    let localResults: HistoryItem[] = await new Promise((resolve, reject) => {
       const tx = this.db!.transaction(STORE_HISTORY, 'readonly');
       const store = tx.objectStore(STORE_HISTORY);
       const index = store.index('timestamp');
-      // Get all, but typically you'd want pagination. For now, getting all is fine for a few GB locally.
-      // We reverse direction to show newest first
       const request = index.openCursor(null, 'prev');
       const results: HistoryItem[] = [];
 
@@ -115,43 +139,105 @@ class DBService {
       };
       request.onerror = () => reject("Failed to fetch history");
     });
+
+    // 2. Fetch remote Supabase history items
+    try {
+      const { data, error } = await supabase
+        .from('generation_history')
+        .select('*')
+        .order('timestamp', { ascending: false });
+
+      if (!error && Array.isArray(data) && data.length > 0) {
+        const remoteItems: HistoryItem[] = data.map(row => ({
+          id: row.id,
+          prompt: row.prompt,
+          imageUrl: row.image_url,
+          roleUsed: row.parameters?.roleUsed,
+          model: (row.parameters?.model || 'gemini-2.5-flash') as any,
+          timestamp: Number(row.timestamp) || Date.now(),
+          size: Number(row.size) || 0
+        }));
+
+        // Merge remote items with local items by ID or timestamp
+        const localIds = new Set(localResults.map(i => i.id));
+        remoteItems.forEach(ri => {
+          if (!localIds.has(ri.id)) {
+            localResults.push(ri);
+          }
+        });
+
+        // Re-sort newest first
+        localResults.sort((a, b) => b.timestamp - a.timestamp);
+      }
+    } catch (e) {
+      console.warn("Supabase history sync warning:", e);
+    }
+
+    return localResults;
   }
 
   async deleteHistoryItem(id: string): Promise<void> {
     await this.init();
-    return new Promise((resolve, reject) => {
+
+    // Delete locally
+    await new Promise<void>((resolve, reject) => {
       const tx = this.db!.transaction(STORE_HISTORY, 'readwrite');
       const store = tx.objectStore(STORE_HISTORY);
       store.delete(id);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject("Failed to delete item");
     });
+
+    // Delete on Supabase
+    try {
+      await supabase.from('generation_history').delete().eq('id', id);
+    } catch (e) {
+      console.warn("Supabase delete history item warning:", e);
+    }
   }
 
   async deleteHistoryItems(ids: string[]): Promise<void> {
     await this.init();
-    return new Promise((resolve, reject) => {
+
+    await new Promise<void>((resolve, reject) => {
       const tx = this.db!.transaction(STORE_HISTORY, 'readwrite');
       const store = tx.objectStore(STORE_HISTORY);
-      
-      ids.forEach(id => {
-          store.delete(id);
-      });
-
+      ids.forEach(id => store.delete(id));
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject("Failed to delete items");
     });
+
+    try {
+      for (const id of ids) {
+        await supabase.from('generation_history').delete().eq('id', id);
+      }
+    } catch (e) {
+      console.warn("Supabase delete history items warning:", e);
+    }
   }
 
   async clearHistory(): Promise<void> {
     await this.init();
-    return new Promise((resolve, reject) => {
+
+    await new Promise<void>((resolve, reject) => {
       const tx = this.db!.transaction(STORE_HISTORY, 'readwrite');
       const store = tx.objectStore(STORE_HISTORY);
       store.clear();
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject("Failed to clear history");
     });
+
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData?.user?.id;
+      if (userId) {
+        await supabase.from('generation_history').delete().eq('user_id', userId);
+      } else {
+        await supabase.from('generation_history').delete();
+      }
+    } catch (e) {
+      console.warn("Supabase clear history warning:", e);
+    }
   }
 
   // --- Template Methods ---

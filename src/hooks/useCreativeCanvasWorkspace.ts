@@ -5,7 +5,7 @@ import { AgentMessage, SceneQueueItem, GenerationBatch, SaveStatus, ViewportStat
 import { mapExistingNineGridResultToCanvasNodes } from '../adapters/creativeCanvasNineGridAdapter';
 import { supabase } from '../lib/supabase';
 import { parseJsonResponse, assertSerializableRequestPayload } from '../utils/apiUtils';
-import { generateEditedImage } from '../services/geminiService';
+import { generateEditedImage, resolveClientImageToBase64 } from '../services/geminiService';
 import { canvasService } from '../services/canvasService';
 import { logCanvasDiagnostic } from '../utils/canvasDiagnostic';
 
@@ -129,6 +129,47 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedSceneIndex, setSelectedSceneIndex] = useState<number | null>(null);
 
+  // Model & Resolution config for Image Generation
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-3.1-flash-image');
+  const [selectedResolution, setSelectedResolution] = useState<'1K' | '2K' | '4K'>('2K');
+
+  // C4B-1 Product DNA Version & Selection Linkage States
+  const [dnaCode, setDnaCode] = useState<string | undefined>(undefined);
+  const [productDnaVersionCode, setProductDnaVersionCode] = useState<string | undefined>(undefined);
+  const [productDnaVersionId, setProductDnaVersionId] = useState<string | undefined>(undefined);
+  const [dnaVersions, setDnaVersions] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (activeDna) {
+      if ((activeDna as any).dnaCode) setDnaCode((activeDna as any).dnaCode);
+      if ((activeDna as any).versionCode) setProductDnaVersionCode((activeDna as any).versionCode);
+      if ((activeDna as any).productDnaVersionId) setProductDnaVersionId((activeDna as any).productDnaVersionId);
+    }
+  }, [activeDna]);
+
+  const fetchDnaVersions = useCallback(async () => {
+    try {
+      const targetProjectId = activeProjectRef.current?.id || workspaceIdParam || 'latest';
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch(`/api/projects/${targetProjectId}/product-dna`, {
+        headers: { ...authHeaders }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.productDna) {
+          if (data.productDna.dna_code) setDnaCode(data.productDna.dna_code);
+          if (data.productDna.version_code) setProductDnaVersionCode(data.productDna.version_code);
+          if (data.productDna.current_version_id) setProductDnaVersionId(data.productDna.current_version_id);
+          if (Array.isArray(data.versions)) setDnaVersions(data.versions);
+        }
+      }
+    } catch (e) {}
+  }, [workspaceIdParam]);
+
+  useEffect(() => {
+    fetchDnaVersions();
+  }, [fetchDnaVersions]);
+
   const [messages, setMessages] = useState<AgentMessage[]>([
     {
       id: 'msg-1',
@@ -142,7 +183,7 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     setMessages(prev => [
       ...prev,
       {
-        id: `msg-${Date.now()}`,
+        id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
         sender: 'agent',
         text,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -150,11 +191,38 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     ]);
   }, []);
 
+  const handleSelectDnaVersion = useCallback(async (versionId: string) => {
+    try {
+      const targetProjectId = activeProjectRef.current?.id || workspaceIdParam || 'latest';
+      const authHeaders = await getAuthHeaders();
+      const dnaRes = await fetch(`/api/projects/${targetProjectId}/product-dna`, { headers: { ...authHeaders } });
+      const dnaData = await dnaRes.json();
+      const dnaId = dnaData?.productDna?.id;
+      if (!dnaId) return;
+
+      const res = await fetch(`/api/product-dnas/${dnaId}/select-version`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ versionId })
+      });
+      const data = await res.json();
+      if (data.success && data.version) {
+        setProductDnaVersionId(data.version.id);
+        const vCode = data.version.version_code || `V00${data.version.version_number}`;
+        setProductDnaVersionCode(vCode);
+        addAgentMessage(`✅ 已成功将当前 Product DNA 版本切换至 ${vCode}`);
+        fetchDnaVersions();
+      }
+    } catch (e) {
+      console.error('Failed to select DNA version:', e);
+    }
+  }, [workspaceIdParam, addAgentMessage, fetchDnaVersions]);
+
   const addUserMessage = useCallback((text: string) => {
     setMessages(prev => [
       ...prev,
       {
-        id: `msg-${Date.now()}`,
+        id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
         sender: 'user',
         text,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -310,9 +378,16 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     }
   };
 
+  // Format byte size to human readable string
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
   // Upload file & handle pipeline
   const handleUploadFile = async (file: File) => {
-    const validTypes = ['image/png', 'image/jpeg', 'image/webp'];
+    const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
     if (!validTypes.includes(file.type)) {
       setErrorMessage('不支持的文件格式。请上传 PNG, JPG 或 WEBP 图片。');
       return;
@@ -327,6 +402,8 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     setErrorMessage(null);
     addUserMessage(`上传产品主图：${file.name}`);
 
+    const formattedSize = formatFileSize(file.size);
+
     const reader = new FileReader();
     reader.onload = async event => {
       const b64 = event.target?.result as string;
@@ -334,6 +411,19 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
         setUploadState('error');
         setErrorMessage('图片文件读取失败');
         return;
+      }
+
+      // Measure dimensions asynchronously
+      let dimensions: { width: number; height: number } | undefined;
+      try {
+        dimensions = await new Promise<{ width: number; height: number }>((resolve) => {
+          const img = new Image();
+          img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+          img.onerror = () => resolve({ width: 0, height: 0 });
+          img.src = b64;
+        });
+      } catch (e) {
+        console.warn('Failed to calculate image dimensions', e);
       }
 
       setUploadedBase64(b64);
@@ -349,12 +439,17 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
             imageUrl: b64,
             fileName: file.name,
             mimeType: file.type,
+            fileSize: formattedSize,
+            dimensions,
+            status: 'analyzing',
             uploadedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             onReanalyze: () => {
               if (activeProject && b64) {
                 performDnaExtraction(activeProject, b64);
               }
-            }
+            },
+            onUpload: (f: File) => handleUploadFile(f),
+            onRemove: () => handleRemoveProductImage()
           }
         };
         if (existing) {
@@ -391,6 +486,36 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     };
 
     reader.readAsDataURL(file);
+  };
+
+  const handleRemoveProductImage = () => {
+    setUploadedBase64(null);
+    setUploadedImageUrl(null);
+    setActiveDna(null);
+    setUploadState('idle');
+    setErrorMessage(null);
+    setNodes(prev =>
+      prev.map(n => {
+        if (n.id === 'img-node-1') {
+          return {
+            ...n,
+            data: {
+              imageUrl: undefined,
+              fileName: undefined,
+              mimeType: undefined,
+              fileSize: undefined,
+              uploadedAt: undefined,
+              dimensions: undefined,
+              status: 'idle',
+              onUpload: (f: File) => handleUploadFile(f),
+              onRemove: () => handleRemoveProductImage()
+            }
+          };
+        }
+        return n;
+      })
+    );
+    addAgentMessage('已成功移除产品主图，您可以随时重新上传。');
   };
 
   const handleReanalyze = () => {
@@ -639,30 +764,74 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     addAgentMessage(`⚠️ 第 ${screenIndex} 屏渲染图片已被标记为【未通过】。修改要求：“${feedback}”。可点击【根据反馈重新生成】修正。`);
   };
 
-  const handleGenerateSceneImage = async (screenIndex: number, reviewFeedback?: string) => {
+  const handleGenerateSceneImage = async (
+    screenIndex: number, 
+    reviewFeedback?: string, 
+    overrideModel?: string, 
+    overrideResolution?: '1K' | '2K' | '4K'
+  ) => {
     if (generatingScenesRef.current.has(screenIndex)) {
       console.warn(`第 ${screenIndex} 屏图片生成正在进行中，忽略重复触发`);
       return;
     }
 
-    if (!uploadedBase64Ref.current) {
+    const modelToUse = overrideModel || selectedModel || 'gemini-3.1-flash-image';
+    const resolutionToUse = overrideResolution || selectedResolution || '2K';
+    const isGpt = modelToUse.includes('gpt-image');
+
+    let rawB64 = uploadedBase64Ref.current || uploadedBase64;
+    if (!rawB64) {
+      const imgNode = nodes.find(n => n.id === 'img-node-1' || n.type === 'productImageNode' || n.type === 'productImage');
+      if (imgNode?.data?.imageUrl) {
+        rawB64 = imgNode.data.imageUrl as string;
+      }
+    }
+
+    if (!rawB64) {
       addAgentMessage('❌ 缺少产品主图，请先上传产品主角图后再生成图片。');
       return;
     }
 
-    if (!activeDna) {
-      addAgentMessage('❌ 缺少产品 DNA 数据，请先完成 DNA 提取后再生成图片。');
+    let dna = activeDna || agentRun?.dna;
+    if (!dna) {
+      const dnaNode = nodes.find(n => n.id === 'dna-node-1' || n.type === 'productDnaNode');
+      if (dnaNode?.data) {
+        dna = dnaNode.data as unknown as ProductVisualDNA;
+      }
+    }
+
+    if (!dna) {
+      addAgentMessage('❌ 缺少产品 DNA 数据，请先完成 DNA 提取后再生成海报/图片。');
       return;
     }
 
-    const screen = agentRun?.plan?.screens?.find(s => s.screenIndex === screenIndex);
+    let screen = agentRun?.plan?.screens?.find(s => s.screenIndex === screenIndex);
+    if (!screen) {
+      const sceneNode = nodes.find(
+        n => n.id === `scene-plan-node-${screenIndex}` || n.data?.screenIndex === screenIndex || (n.id === selectedNodeId && n.data?.promptSuggestion)
+      );
+      if (sceneNode?.data) {
+        screen = {
+          screenIndex: Number(sceneNode.data.screenIndex) || screenIndex,
+          screenTitle: (sceneNode.data.screenTitle as string) || `第 ${screenIndex} 屏分镜`,
+          coreSellingPoint: (sceneNode.data.coreSellingPoint as string) || '',
+          visualComposition: (sceneNode.data.visualComposition as string) || '',
+          lightingAndAtmosphere: (sceneNode.data.lightingAndAtmosphere as string) || '',
+          promptSuggestion: (sceneNode.data.promptSuggestion as string) || (sceneNode.data.prompt as string) || '',
+          aspectRatio: (sceneNode.data.aspectRatio as string) || '3:4',
+          lockedRules: []
+        };
+      }
+    }
+
     if (!screen || !screen.promptSuggestion) {
       addAgentMessage(`❌ 未找到第 ${screenIndex} 屏分镜策划或提示词信息。`);
       return;
     }
 
     generatingScenesRef.current.add(screenIndex);
-    addAgentMessage(`正在调用 OpenAI gpt-image-2 渲染引擎生成第 ${screenIndex} 屏画面...`);
+    const modelLabel = isGpt ? 'OpenAI GPT image-2' : modelToUse.includes('3-pro') ? 'Google Gemini v3.0 Pro' : modelToUse.includes('2.5') ? 'Google Gemini v2.5 Flash' : 'Google Gemini v3.1 Flash';
+    addAgentMessage(`正在调用 ${modelLabel} (${resolutionToUse}) 渲染引擎生成第 ${screenIndex} 屏画面...`);
 
     // Determine initial node position
     let sceneNodePos = { x: 1150, y: (screenIndex - 1) * 260 };
@@ -685,8 +854,8 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
         data: {
           sceneIndex: screenIndex,
           screenTitle: screen.screenTitle,
-          model: 'gpt-image-2',
-          provider: 'openai',
+          model: modelToUse,
+          provider: isGpt ? 'openai' : 'google',
           aspectRatio: screen.aspectRatio || '3:4',
           referenceCount: 1,
           status: 'generating',
@@ -722,42 +891,77 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     });
 
     try {
-      const rawB64 = uploadedBase64Ref.current;
-      const cleanB64 = rawB64.includes(',') ? rawB64.split(',')[1] : rawB64;
+      const targetRaw = rawB64 || uploadedBase64Ref.current || uploadedBase64 || '';
+      let cleanB64 = await resolveClientImageToBase64(targetRaw);
 
-      let fullPrompt = `${screen.promptSuggestion}\n\n[核心画幅与构图]: ${screen.visualComposition}，光影氛围：${screen.lightingAndAtmosphere}。\n[家具强约束]: 必须保持核心产品结构与造型与参考图完全一致，扶手、靠背缝线、座包材质严格符合 DNA 描述。严禁在画面中渲染任何文字、尺寸标尺、箭头或 UI 元素。`;
+      if (!cleanB64) {
+        const imgNode = nodes.find(n => n.id === 'img-node-1' || n.type === 'productImageNode' || n.type === 'productImage');
+        if (imgNode?.data?.imageUrl) {
+          cleanB64 = await resolveClientImageToBase64(imgNode.data.imageUrl as string);
+        }
+      }
+
+      if (cleanB64 && !uploadedBase64Ref.current) {
+        uploadedBase64Ref.current = cleanB64;
+      }
+
+      let fullPrompt = `${screen.promptSuggestion}\n\n[核心画幅与构图]: ${screen.visualComposition}，光影氛围：${screen.lightingAndAtmosphere}。`;
+
+      if (dna) {
+        const styleStr = Array.isArray(dna.style) ? dna.style.join('、') : (dna.style || '');
+        const matStr = Array.isArray(dna.materials) ? dna.materials.join('、') : (dna.materials || '');
+        const structStr = Array.isArray(dna.structuralFeatures)
+          ? dna.structuralFeatures.map(f => `${f.name}: ${f.description}`).join('；')
+          : '';
+        const lockedStr = Array.isArray(dna.lockedFeatures)
+          ? dna.lockedFeatures.map(f => `${f.name}(${f.rule})`).join('；')
+          : '';
+
+        fullPrompt += `\n\n[核心产品主角 DNA 强约束 (必须与参考主图完全一致)]:`;
+        if (dna.category) fullPrompt += `\n- 产品品类: ${dna.category}`;
+        if (dna.primaryColor) fullPrompt += `\n- 主色调与外观色彩: ${dna.primaryColor}`;
+        if (matStr) fullPrompt += `\n- 核心材质与触感: ${matStr}`;
+        if (styleStr) fullPrompt += `\n- 设计风格: ${styleStr}`;
+        if (structStr) fullPrompt += `\n- 关键结构特征: ${structStr}`;
+        if (lockedStr) fullPrompt += `\n- 必须锁定规则: ${lockedStr}`;
+        fullPrompt += `\n- 极其重要: 画面中的核心家具/产品主体必须100%参照输入参考主图，保持造型结构、扶手样式、靠背弧度、包边缝线、面料材质与色调完全一致，严禁改变产品外观样式。`;
+      } else {
+        fullPrompt += `\n\n[家具强约束]: 必须保持核心产品结构与造型与参考图完全一致，扶手、靠背缝线、座包材质严格符合 DNA 描述。`;
+      }
 
       if (reviewFeedback) {
         fullPrompt += `\n\n[根据审核反馈重绘调整]: ${reviewFeedback}`;
       }
+
+      fullPrompt += `\n\n严禁在画面中渲染任何文字、尺寸标尺、箭头或 UI 元素。`;
 
       // Assert serializable DTO before call
       const generatePayload = {
         screenIndex,
         prompt: fullPrompt,
         aspectRatio: screen.aspectRatio || '3:4',
-        model: 'gpt-image-2',
-        hasRefImage: true
+        model: modelToUse,
+        hasRefImage: !!cleanB64
       };
       assertSerializableRequestPayload(generatePayload, 'generatePayload');
 
-      const imageAttachments: ImageAttachment[] = [
+      const imageAttachments: ImageAttachment[] = cleanB64 ? [
         {
           id: `ref-img-${Date.now()}`,
-          previewUrl: rawB64,
+          previewUrl: cleanB64.startsWith('data:') ? cleanB64 : `data:image/jpeg;base64,${cleanB64}`,
           base64Data: cleanB64,
           mimeType: 'image/jpeg',
           width: 1024,
           height: 1024
         }
-      ];
+      ] : [];
 
       const result = await generateEditedImage(
         fullPrompt,
         imageAttachments,
         screen.aspectRatio || '3:4',
-        '1K',
-        'gpt-image-2',
+        resolutionToUse,
+        modelToUse as any,
         undefined,
         msg => console.log(`[SceneImage #${screenIndex}]`, msg)
       );
@@ -772,8 +976,8 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
                 data: {
                   ...n.data,
                   status: 'completed',
-                  model: result.actualModel || 'gpt-image-2',
-                  provider: result.provider || 'openai'
+                  model: result.actualModel || modelToUse,
+                  provider: result.provider || (isGpt ? 'openai' : 'google')
                 }
               };
             }
@@ -794,10 +998,10 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
               sceneIndex: screenIndex,
               screenTitle: screen.screenTitle,
               imageUrl: result.imageUrl,
-              dimensions: '1024x1365',
+              dimensions: resolutionToUse === '4K' ? '3840x2160' : resolutionToUse === '2K' ? '2560x1440' : '1024x1365',
               aspectRatio: screen.aspectRatio || '3:4',
-              model: result.actualModel || 'gpt-image-2',
-              provider: result.provider || 'openai',
+              model: result.actualModel || modelToUse,
+              provider: result.provider || (isGpt ? 'openai' : 'google'),
               generatedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               version,
               reviewStatus: 'pendingReview',
@@ -1140,30 +1344,261 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     }, 100);
   }, [addAgentMessage, processQueue]);
 
+  const handleSelectSceneIndex = useCallback((idx: number | null) => {
+    setSelectedSceneIndex(idx);
+    let targetNodeId: string | null = null;
+    if (idx !== null) {
+      const sceneNode = nodes.find(n => n.id === `scene-plan-node-${idx}`);
+      const genNode = nodes.find(n => n.id === `gen-img-node-${idx}`);
+      targetNodeId = sceneNode?.id || genNode?.id || `scene-plan-node-${idx}`;
+      setNodes(prev => prev.map(n => ({
+        ...n,
+        selected: n.id === targetNodeId || (genNode && n.id === genNode.id)
+      })));
+    } else {
+      setNodes(prev => prev.map(n => ({ ...n, selected: false })));
+    }
+    setSelectedNodeId(targetNodeId);
+
+    try {
+      const ns = workspaceIdParam ? `c4b1_${workspaceIdParam}` : 'c4b1_default';
+      if (idx !== null) {
+        sessionStorage.setItem(`${ns}_selectedSceneIndex`, String(idx));
+      } else {
+        sessionStorage.removeItem(`${ns}_selectedSceneIndex`);
+      }
+      if (targetNodeId) {
+        sessionStorage.setItem(`${ns}_selectedNodeId`, targetNodeId);
+      } else {
+        sessionStorage.removeItem(`${ns}_selectedNodeId`);
+      }
+    } catch (e) {}
+  }, [nodes, setNodes, workspaceIdParam]);
+
   const handleNodeClick = (_: React.MouseEvent, node: Node) => {
     setSelectedNodeId(node.id);
-    if (node.id.startsWith('scene-plan-node-')) {
-      const idxStr = node.id.replace('scene-plan-node-', '');
-      const idx = parseInt(idxStr, 10);
-      if (!isNaN(idx)) {
-        setSelectedSceneIndex(idx);
-      }
-    } else if (node.id.startsWith('gen-img-node-')) {
-      const idxStr = node.id.replace('gen-img-node-', '');
-      const idx = parseInt(idxStr, 10);
-      if (!isNaN(idx)) {
-        setSelectedSceneIndex(idx);
-      }
-    } else if (node.id.startsWith('img-gen-task-')) {
-      const idxStr = node.id.replace('img-gen-task-', '');
-      const idx = parseInt(idxStr, 10);
-      if (!isNaN(idx)) {
-        setSelectedSceneIndex(idx);
-      }
-    } else {
-      setSelectedSceneIndex(null);
+    setNodes(prev => prev.map(n => ({ ...n, selected: n.id === node.id })));
+    let foundIdx: number | null = null;
+    if (node.id.startsWith('scene-plan-node-') || node.id.startsWith('gen-img-node-') || node.id.startsWith('img-gen-task-')) {
+      const idxStr = node.id.replace(/^(scene-plan-node-|gen-img-node-|img-gen-task-)/, '');
+      const parsed = parseInt(idxStr, 10);
+      if (!isNaN(parsed)) foundIdx = parsed;
     }
+    if (foundIdx === null && node.data?.screenIndex) {
+      const parsed = parseInt(String(node.data.screenIndex), 10);
+      if (!isNaN(parsed)) foundIdx = parsed;
+    }
+    setSelectedSceneIndex(foundIdx);
+
+    try {
+      const ns = workspaceIdParam ? `c4b1_${workspaceIdParam}` : 'c4b1_default';
+      sessionStorage.setItem(`${ns}_selectedNodeId`, node.id);
+      if (foundIdx !== null) {
+        sessionStorage.setItem(`${ns}_selectedSceneIndex`, String(foundIdx));
+      } else {
+        sessionStorage.removeItem(`${ns}_selectedSceneIndex`);
+      }
+    } catch (e) {}
   };
+
+  // Safe recovery/fallback for selected node per canvas namespace
+  useEffect(() => {
+    if (nodes.length > 0) {
+      const ns = workspaceIdParam ? `c4b1_${workspaceIdParam}` : 'c4b1_default';
+      try {
+        const storedNodeId = sessionStorage.getItem(`${ns}_selectedNodeId`);
+        const storedSceneIndex = sessionStorage.getItem(`${ns}_selectedSceneIndex`);
+
+        if (storedNodeId) {
+          const exists = nodes.some(n => n.id === storedNodeId);
+          if (exists) {
+            if (selectedNodeId !== storedNodeId) {
+              setSelectedNodeId(storedNodeId);
+            }
+          } else {
+            // Node does not exist on this canvas - safely fallback
+            if (selectedNodeId === storedNodeId) {
+              setSelectedNodeId(null);
+            }
+            sessionStorage.removeItem(`${ns}_selectedNodeId`);
+          }
+        }
+
+        if (storedSceneIndex !== null) {
+          const parsed = parseInt(storedSceneIndex, 10);
+          if (!isNaN(parsed) && selectedSceneIndex !== parsed) {
+            setSelectedSceneIndex(parsed);
+          }
+        }
+      } catch (e) {}
+    }
+  }, [workspaceIdParam, nodes.length]);
+
+  // Phase C4-Edit: Canvas Selection, Deletion, Addition, Duplication, and Inline Editing
+  const selectAllNodes = useCallback(() => {
+    setNodes(prev => prev.map(n => ({ ...n, selected: true })));
+  }, [setNodes]);
+
+  const clearSelection = useCallback(() => {
+    setNodes(prev => prev.map(n => ({ ...n, selected: false })));
+  }, [setNodes]);
+
+  const deleteNodeById = useCallback((nodeId: string) => {
+    hasUserMutationRef.current = true;
+    setNodes(prev => prev.filter(n => n.id !== nodeId));
+    setEdges(prev => prev.filter(e => e.source !== nodeId && e.target !== nodeId));
+  }, [setNodes, setEdges]);
+
+  const deleteSelectedNodes = useCallback(() => {
+    hasUserMutationRef.current = true;
+    setNodes(prev => {
+      const selectedIds = new Set(prev.filter(n => n.selected).map(n => n.id));
+      if (selectedIds.size === 0) return prev;
+
+      setEdges(prevEdges =>
+        prevEdges.filter(e => !selectedIds.has(e.source) && !selectedIds.has(e.target))
+      );
+
+      return prev.filter(n => !selectedIds.has(n.id));
+    });
+  }, [setNodes, setEdges]);
+
+  const duplicateNodeById = useCallback((nodeId: string) => {
+    hasUserMutationRef.current = true;
+    setNodes(prev => {
+      const target = prev.find(n => n.id === nodeId);
+      if (!target) return prev;
+      const newId = `node_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      const newNode: Node = {
+        ...target,
+        id: newId,
+        position: {
+          x: (target.position?.x || 0) + 40,
+          y: (target.position?.y || 0) + 40
+        },
+        selected: true,
+        data: {
+          ...target.data,
+          ...(target.data?.screenTitle ? { screenTitle: `${target.data.screenTitle} (副本)` } : {}),
+          ...(target.data?.title ? { title: `${target.data.title} (副本)` } : {})
+        }
+      };
+      return [...prev.map(n => ({ ...n, selected: false })), newNode];
+    });
+  }, [setNodes]);
+
+  const duplicateSelectedNodes = useCallback(() => {
+    hasUserMutationRef.current = true;
+    setNodes(prev => {
+      const selectedList = prev.filter(n => n.selected);
+      if (selectedList.length === 0) return prev;
+
+      const newNodes = selectedList.map(n => {
+        const newId = `node_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+        return {
+          ...n,
+          id: newId,
+          position: {
+            x: (n.position?.x || 0) + 40,
+            y: (n.position?.y || 0) + 40
+          },
+          selected: true,
+          data: {
+            ...n.data,
+            ...(n.data?.screenTitle ? { screenTitle: `${n.data.screenTitle} (副本)` } : {}),
+            ...(n.data?.title ? { title: `${n.data.title} (副本)` } : {})
+          }
+        };
+      });
+
+      const unselectedOld = prev.map(n => ({ ...n, selected: false }));
+      return [...unselectedOld, ...newNodes];
+    });
+  }, [setNodes]);
+
+  const updateNodeData = useCallback((nodeId: string, partialData: any) => {
+    hasUserMutationRef.current = true;
+    setNodes(prev =>
+      prev.map(n => (n.id === nodeId ? { ...n, data: { ...n.data, ...partialData } } : n))
+    );
+  }, [setNodes]);
+
+  const addCustomNode = useCallback((nodeKind: 'note' | 'scene' | 'prompt' | 'image', customParams?: any) => {
+    hasUserMutationRef.current = true;
+    const newId = `node_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+    setNodes(prev => {
+      let spawnX = 220;
+      let spawnY = 180;
+
+      if (prev.length > 0) {
+        const lastNode = prev[prev.length - 1];
+        spawnX = (lastNode.position?.x || 100) + 50;
+        spawnY = (lastNode.position?.y || 100) + 50;
+      }
+
+      let newNode: Node;
+
+      if (nodeKind === 'note') {
+        newNode = {
+          id: newId,
+          type: 'noteNode',
+          position: { x: spawnX, y: spawnY },
+          selected: true,
+          data: {
+            title: customParams?.title || '自定义企划便签',
+            text: customParams?.text || '双击或点击编辑按钮输入调整意见、重点强调或选型标注...',
+            color: customParams?.color || 'amber'
+          }
+        };
+      } else if (nodeKind === 'prompt') {
+        newNode = {
+          id: newId,
+          type: 'noteNode',
+          position: { x: spawnX, y: spawnY },
+          selected: true,
+          data: {
+            title: customParams?.title || 'AI 绘图提示词',
+            text: customParams?.text || 'cinematic lighting, ultra-realistic product photography, 8k resolution, cozy atmosphere...',
+            color: 'blue'
+          }
+        };
+      } else if (nodeKind === 'scene') {
+        const sceneIndex = prev.filter(n => n.type === 'scenePlanNode' || n.type === 'scenePlan').length + 1;
+        newNode = {
+          id: newId,
+          type: 'scenePlanNode',
+          position: { x: spawnX, y: spawnY },
+          selected: true,
+          data: {
+            screenIndex: sceneIndex,
+            screenTitle: customParams?.title || `第 ${sceneIndex} 屏：自定义视觉场景`,
+            coreSellingPoint: customParams?.sellingPoint || '展示产品核心卖点与材质细节',
+            visualComposition: customParams?.composition || '特写与家居环境组合视角',
+            lightingAndAtmosphere: customParams?.lighting || '自然日光与高端奢华氛围',
+            promptSuggestion: customParams?.prompt || 'detailed product close-up shot, warm luxury living room setting'
+          }
+        };
+      } else {
+        newNode = {
+          id: newId,
+          type: 'productImageNode',
+          position: { x: spawnX, y: spawnY },
+          selected: true,
+          data: {
+            fileName: customParams?.fileName || '参考元素.jpg',
+            imageUrl: customParams?.imageUrl || '',
+            uploadedAt: '刚刚'
+          }
+        };
+      }
+
+      const deselectPrev = prev.map(n => ({ ...n, selected: false }));
+      return [...deselectPrev, newNode];
+    });
+
+    return newId;
+  }, [setNodes]);
 
   // Re-bind interactive handlers for restored nodes
   const attachNodeHandlers = useCallback(
@@ -1171,8 +1606,19 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
       return nodeList.map(node => {
         const data = { ...(node.data || {}) };
 
+        // Bind universal edit & delete handlers to every node
+        data.onDelete = () => deleteNodeById(node.id);
+        data.onDuplicate = () => duplicateNodeById(node.id);
+        data.onChange = (updated: any) => updateNodeData(node.id, updated);
+        data.onUpdate = (updated: any) => updateNodeData(node.id, updated);
+
         if (node.id === 'dna-node-1' || node.type === 'productDnaNode') {
           data.onViewFullDna = () => setShowFullDnaDrawer(true);
+          data.dnaCode = dnaCode || data.dnaCode || 'DNA-178229';
+          data.versionCode = productDnaVersionCode || data.versionCode || 'DNA-V001';
+          data.productDnaVersionId = productDnaVersionId || data.productDnaVersionId;
+          data.versions = dnaVersions.length > 0 ? dnaVersions : data.versions;
+          data.onSelectDnaVersion = handleSelectDnaVersion;
         } else if (node.id === 'nine-grid-plan-node' || node.type === 'nineGridPlanNode') {
           data.onViewFullPlan = () => {
             setSelectedNodeId('nine-grid-plan-node');
@@ -1190,11 +1636,17 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
         } else if (node.id.startsWith('scene-plan-node-') || node.type === 'scenePlanNode') {
           const idxStr = node.id.replace('scene-plan-node-', '');
           const idx: number = parseInt(idxStr, 10) || Number(data.screenIndex) || 1;
+          const formattedIdx = String(idx).padStart(2, '0');
+          data.assetSkuCode = data.assetSkuCode || `SKU-SCENE-${formattedIdx}`;
+          data.assetVersionCode = data.assetVersionCode || 'V001';
+          data.productDnaVersionCode = productDnaVersionCode || 'DNA-V001';
+          data.productDnaVersionId = productDnaVersionId;
           data.onViewDetail = () => {
             setSelectedNodeId(node.id);
             setSelectedSceneIndex(idx);
           };
           data.onReplanScene = () => handleReplanSingleScene(idx);
+          data.onGenerateImage = () => handleGenerateSceneImage(idx);
         } else if (node.id.startsWith('img-gen-task-') || node.type === 'imageGenerationNode') {
           const idxStr = node.id.replace('img-gen-task-', '');
           const idx: number = parseInt(idxStr, 10) || Number(data.screenIndex) || 1;
@@ -1202,6 +1654,11 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
         } else if (node.id.startsWith('gen-img-node-') || node.type === 'generatedImageNode') {
           const idxStr = node.id.replace('gen-img-node-', '');
           const idx: number = parseInt(idxStr, 10) || Number(data.screenIndex) || 1;
+          const formattedIdx = String(idx).padStart(2, '0');
+          data.assetSkuCode = data.assetSkuCode || `SKU-SCENE-${formattedIdx}`;
+          data.assetVersionCode = data.assetVersionCode || `V00${data.version || 1}`;
+          data.productDnaVersionCode = productDnaVersionCode || 'DNA-V001';
+          data.productDnaVersionId = productDnaVersionId;
           data.onViewDetail = () => {
             setSelectedNodeId(node.id);
             setSelectedSceneIndex(idx);
@@ -1216,6 +1673,9 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
       });
     },
     [
+      deleteNodeById,
+      duplicateNodeById,
+      updateNodeData,
       handleGenerateNineGridPlan,
       handleReplanSingleScene,
       handleGenerateSceneImage,
@@ -1267,6 +1727,25 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
           setNodes(loadedNodes);
           setEdges(loadedEdges);
           setViewport(loadedViewport);
+
+          // Restore uploaded image state if present
+          const imgNode = loadedNodes.find((n: any) => n.id === 'img-node-1' || n.type === 'productImageNode');
+          if (imgNode?.data?.imageUrl) {
+            setUploadedImageUrl(imgNode.data.imageUrl as string);
+            if (typeof imgNode.data.imageUrl === 'string' && imgNode.data.imageUrl.startsWith('data:image/')) {
+              setUploadedBase64(imgNode.data.imageUrl as string);
+            }
+          }
+          try {
+            const rawLocal = localStorage.getItem(localKey) || localStorage.getItem('manwah_canvas_latest');
+            if (rawLocal) {
+              const localSnapshot = JSON.parse(rawLocal);
+              if (localSnapshot?.uploadedBase64 && !uploadedBase64Ref.current) {
+                setUploadedBase64(localSnapshot.uploadedBase64);
+              }
+            }
+          } catch (e) {}
+
           setCurrentRevisionNumber(serverCanvas.current_revision || serverCanvas.currentRevision || 0);
           setLastSavedAt(serverCanvas.last_saved_at || serverCanvas.lastSavedAt || new Date().toISOString());
           setSaveStatus('cloud_saved');
@@ -1283,7 +1762,7 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
           logCanvasDiagnostic({
             projectId: targetProjectId,
             canvasId: targetCanvasId,
-            storageMode: serverCanvas.storageMedium || 'cloud',
+            storageMode: (serverCanvas as any).storageMedium || 'cloud',
             nodesCount: loadedNodes.length,
             edgesCount: loadedEdges.length,
             source: 'hydrate_from_server_success'
@@ -1302,7 +1781,7 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
       if (!serverSuccess && isMounted) {
         // Fallback to LocalStorage
         try {
-          const raw = localStorage.getItem(localKey) || localStorage.getItem('manwah_canvas_latest');
+          const raw = localStorage.getItem(localKey) || (targetProjectId !== 'new' ? localStorage.getItem('manwah_canvas_latest') : null);
           if (raw) {
             const snapshot = JSON.parse(raw);
             if (snapshot && Array.isArray(snapshot.nodes) && snapshot.nodes.length > 0) {
@@ -1317,7 +1796,16 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
               }
               if (snapshot.agentRun) setAgentRun(snapshot.agentRun);
               if (snapshot.messages && Array.isArray(snapshot.messages) && snapshot.messages.length > 0) {
-                setMessages(snapshot.messages);
+                const seenMsgIds = new Set<string>();
+                const sanitizedMsgs = snapshot.messages.map((m: any, idx: number) => {
+                  let msgId = m.id || `msg-${idx}`;
+                  if (seenMsgIds.has(msgId)) {
+                    msgId = `${msgId}-${idx}-${Math.random().toString(36).substring(2, 6)}`;
+                  }
+                  seenMsgIds.add(msgId);
+                  return { ...m, id: msgId };
+                });
+                setMessages(sanitizedMsgs);
               }
               setEdges(snapshot.edges || []);
               setNodes(snapshot.nodes);
@@ -1684,18 +2172,24 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     }
   }, [workspaceIdParam, setNodes, setEdges, getCleanSerializableNodes, getCleanSerializableEdges, getStorageKey]);
 
-      setSaveStatus(restored.storageMedium === 'cloud' ? 'cloud_saved' : 'local_saved');
-      setLastSavedAt(new Date().toISOString());
-      console.log(`[CreativeCanvas] Canvas restored from revision ${revisionId} (${cleanNodes.length} nodes) into draft.`);
-    } else {
-      throw new Error('恢复的历史版本未包含有效的节点数据');
-    }
-  }, [workspaceIdParam, setNodes, setEdges, getCleanSerializableNodes, getCleanSerializableEdges]);
+  const clearCanvasWorkspace = useCallback(async () => {
+    hasExplicitUserClearRef.current = true;
+    hasUserMutationRef.current = true;
 
-  const clearCanvasWorkspace = useCallback(() => {
-    setNodes(initialNodes);
-    setEdges(initialEdges);
-    setActiveProject(null);
+    const newProjectId = `proj_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const newCanvasId = `canvas_${newProjectId}`;
+
+    const newProjectObj: CreativeProject = {
+      id: newProjectId,
+      owner_id: userId,
+      name: '新建立体视觉企划案',
+      project_type: 'detail_page',
+      status: 'active',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    setActiveProject(newProjectObj);
     setActiveDna(null);
     setUploadedImageUrl(null);
     setUploadedBase64(null);
@@ -1703,17 +2197,39 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     setAgentRun(null);
     setSelectedNodeId(null);
     setSelectedSceneIndex(null);
-    setMessages([
-      {
-        id: 'msg-1',
-        sender: 'agent',
-        text: '你好！我是视觉企划智能体。请上传产品主角图，我将自动提取造型、色彩、材质与结构 DNA 并同步至左侧画布。',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      }
-    ]);
-    localStorage.removeItem(storageKey);
+
+    const defaultWelcomeMessage: AgentMessage = {
+      id: `msg-${Date.now()}-welcome`,
+      sender: 'agent',
+      text: '你好！我是视觉企划智能体。请上传产品主角图，我将自动提取造型、色彩、材质与结构 DNA 并同步至左侧画布。',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+    setMessages([defaultWelcomeMessage]);
+
+    setNodes(initialNodes);
+    setEdges(initialEdges);
+    setViewport({ x: 0, y: 0, zoom: 1 });
+
+    const localKey = getStorageKey(activeProject?.id || '', workspaceIdParam || '');
+    if (localKey) localStorage.removeItem(localKey);
     localStorage.removeItem('manwah_canvas_latest');
-  }, [storageKey, setNodes, setEdges]);
+
+    try {
+      await canvasService.saveCanvasDraft(newCanvasId, {
+        nodesDraft: initialNodes as any,
+        edgesDraft: [],
+        viewportDraft: { x: 0, y: 0, zoom: 1 },
+        canvasName: '新建立体视觉企划案',
+        hasExplicitUserClear: true
+      });
+      setSaveStatus('cloud_saved');
+    } catch (err) {
+      console.warn('Failed to save fresh draft to server:', err);
+      setSaveStatus('local_saved');
+    }
+
+    return newProjectId;
+  }, [getStorageKey, activeProject, workspaceIdParam, setNodes, setEdges]);
 
   return {
     nodes: displayNodes,
@@ -1728,6 +2244,7 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     showFullDnaDrawer,
     setShowFullDnaDrawer,
     handleUploadFile,
+    handleRemoveProductImage,
     handleReanalyze,
     addUserMessage,
     addAgentMessage,
@@ -1741,11 +2258,23 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     selectedSceneIndex,
     setSelectedNodeId,
     setSelectedSceneIndex,
+    onSelectSceneIndex: handleSelectSceneIndex,
     handleGenerateNineGridPlan,
     handleReplanSingleScene,
     handleNodeClick,
 
+    // C4B-1 DNA Version Exports
+    dnaCode,
+    productDnaVersionCode,
+    productDnaVersionId,
+    dnaVersions,
+    onSelectDnaVersion: handleSelectDnaVersion,
+
     // C3A Exports
+    selectedModel,
+    setSelectedModel,
+    selectedResolution,
+    setSelectedResolution,
     generatingScenes: generatingScenesRef.current,
     handleGenerateSceneImage,
     handleApproveSceneImage,
@@ -1764,6 +2293,16 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     handleCancelBatch,
     handleRetryFailedBatch,
 
+    // C4-Edit Exports
+    selectAllNodes,
+    clearSelection,
+    deleteSelectedNodes,
+    deleteNodeById,
+    duplicateSelectedNodes,
+    duplicateNodeById,
+    addCustomNode,
+    updateNodeData,
+
     // C4A-1 Exports
     saveStatus,
     lastSavedAt,
@@ -1776,6 +2315,6 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     handleRestoreRevision,
     viewport,
     setViewport,
-    canvasId: `canvas_${activeProjectRef.current?.id || workspaceIdParam || 'latest'}`
+    canvasId: `canvas_${activeProject?.id || activeProjectRef.current?.id || workspaceIdParam || 'latest'}`
   };
 }

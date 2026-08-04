@@ -1,5 +1,6 @@
 import React from 'react';
 import { ImagePlus, AlertCircle, CheckCircle2, ShieldCheck, X } from 'lucide-react';
+import { EngineConfigSelector } from './AgentPanel';
 
 interface BatchConfirmModalProps {
   isOpen: boolean;
@@ -11,19 +12,27 @@ interface BatchConfirmModalProps {
     failedCount: number;
     missingSceneNumbers: number[];
   } | null;
+  selectedModel?: string;
+  setSelectedModel?: (m: string) => void;
+  selectedResolution?: '1K' | '2K' | '4K';
+  setSelectedResolution?: (r: '1K' | '2K' | '4K') => void;
 }
 
 export const BatchConfirmModal: React.FC<BatchConfirmModalProps> = ({
   isOpen,
   onClose,
   onConfirm,
-  info
+  info,
+  selectedModel,
+  setSelectedModel,
+  selectedResolution,
+  setSelectedResolution
 }) => {
   if (!isOpen || !info) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fadeIn">
-      <div className="w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl border border-[#E5E0D8] space-y-5 relative">
+      <div className="w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl border border-[#E5E0D8] space-y-4 relative">
         {/* Close icon */}
         <button
           onClick={onClose}
@@ -44,7 +53,7 @@ export const BatchConfirmModal: React.FC<BatchConfirmModalProps> = ({
         </div>
 
         {/* Overview Stats */}
-        <div className="bg-[#FAF8F5] p-4 rounded-2xl border border-[#E5E0D8]/80 space-y-3">
+        <div className="bg-[#FAF8F5] p-3.5 rounded-2xl border border-[#E5E0D8]/80 space-y-2.5">
           <span className="text-[11px] font-bold text-stone-400 uppercase tracking-wider block">
             本次批次计划概要
           </span>
@@ -85,16 +94,26 @@ export const BatchConfirmModal: React.FC<BatchConfirmModalProps> = ({
           </div>
         </div>
 
+        {/* Model & Resolution Selector */}
+        {selectedModel && setSelectedModel && selectedResolution && setSelectedResolution && (
+          <EngineConfigSelector
+            selectedModel={selectedModel}
+            setSelectedModel={setSelectedModel}
+            selectedResolution={selectedResolution}
+            setSelectedResolution={setSelectedResolution}
+          />
+        )}
+
         {/* Safety Note */}
         <div className="flex items-start gap-2.5 text-xs text-stone-600 bg-amber-50/80 p-3 rounded-xl border border-amber-200/60">
           <ShieldCheck className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
           <p className="leading-relaxed">
-            已有图片的屏数（#{1}、#{2} 等）已被智能保留，绝对不会被重复覆盖或重新计费生成。
+            已有图片的屏数已被智能保留，绝对不会被重复覆盖或重新计费生成。
           </p>
         </div>
 
         {/* Actions */}
-        <div className="flex items-center justify-end gap-3 pt-2">
+        <div className="flex items-center justify-end gap-3 pt-1">
           <button
             onClick={onClose}
             className="px-4 py-2.5 rounded-xl text-xs font-bold text-stone-600 bg-stone-100 hover:bg-stone-200 transition-colors"

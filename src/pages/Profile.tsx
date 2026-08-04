@@ -10,17 +10,35 @@ export const fetchProfile = async () => {
   const user = userData?.user;
   if (!user) throw new Error('Not logged in');
   
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', user.id)
-    .single();
-    
-  if (error) throw error;
+  let profileData: any = null;
+  try {
+    const { data } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .maybeSingle();
+    profileData = data;
+  } catch (e) {
+    // Suppress missing profile error
+  }
   
+  const defaultEmpId = user.email ? user.email.split('@')[0] : user.id;
+
+  const mergedProfile = {
+    id: user.id,
+    employee_id: profileData?.employee_id || defaultEmpId,
+    username: profileData?.username || profileData?.employee_id || defaultEmpId,
+    nickname: profileData?.nickname || profileData?.username || defaultEmpId,
+    role: profileData?.role || 'admin',
+    dept_id: profileData?.dept_id || 'dept-1',
+    quota_limit: profileData?.quota_limit ?? 100000,
+    quota_used: profileData?.quota_used ?? 0,
+    ...profileData
+  };
+
   return {
     user,
-    profile: data
+    profile: mergedProfile
   };
 };
 
@@ -56,6 +74,8 @@ export default function Profile() {
   }, [data]);
 
   const handleLogout = async () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('manwah_user');
     await supabase.auth.signOut();
     queryClient.clear();
     window.location.href = '/login';
@@ -155,7 +175,7 @@ export default function Profile() {
             <div className="grid grid-cols-2 gap-4 border-t border-stone-100 pt-4 mb-5">
               <div>
                 <p className="text-xs text-stone-500 mb-1.5">工号 / 用户名</p>
-                <p className="font-bold text-stone-800 text-[15px]">{profile?.username || profile?.employee_id || '-'}</p>
+                <p className="font-bold text-stone-800 text-[15px]">{profile?.username || profile?.employee_id || data?.user?.email?.split('@')[0] || '-'}</p>
               </div>
               <div>
                 <p className="text-xs text-stone-500 mb-1.5">权限角色</p>

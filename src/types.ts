@@ -201,6 +201,11 @@ export interface ProjectAsset {
   mime_type: string;
   width?: number;
   height?: number;
+  url?: string;
+  storage_url?: string;
+  objectKey?: string;
+  file_name?: string;
+  file_size?: number;
   metadata?: Record<string, any>;
   created_at: string;
 }
@@ -298,6 +303,7 @@ export interface AgentRun {
   totalSteps: number;
   plan: DetailPagePlan | null;
   planVersion: number;
+  dna?: ProductVisualDNA;
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;

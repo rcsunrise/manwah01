@@ -161,6 +161,30 @@ const highlightRedText = (text: string) => {
   );
 };
 
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token || '';
+  const user = data?.session?.user;
+  const storedUser = localStorage.getItem('manwah_user');
+  let userUuid = user?.id || '';
+
+  if (!userUuid && storedUser) {
+    try {
+      const parsed = JSON.parse(storedUser);
+      userUuid = parsed.id || '';
+    } catch (e) {}
+  }
+
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  if (userUuid) {
+    headers['x-user-uuid'] = userUuid;
+  }
+  return headers;
+}
+
 const App: React.FC = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -321,6 +345,26 @@ const App: React.FC = () => {
     setIsSyncing(false);
   };
 
+  // Auto save product channels to localStorage
+  useEffect(() => {
+    if (channels && channels.length > 0) {
+      try {
+        localStorage.setItem('manwah_saved_channels', JSON.stringify(channels));
+        localStorage.setItem('manwah_saved_channel_count', String(visibleChannelCount));
+        const storedUser = localStorage.getItem('manwah_user');
+        if (storedUser) {
+          const parsed = JSON.parse(storedUser);
+          if (parsed?.id) {
+            localStorage.setItem(`manwah_saved_channels_${parsed.id}`, JSON.stringify(channels));
+            localStorage.setItem(`manwah_saved_channel_count_${parsed.id}`, String(visibleChannelCount));
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to save channels to storage:', e);
+      }
+    }
+  }, [channels, visibleChannelCount]);
+
   useEffect(() => {
     const initData = async () => {
       try {
@@ -331,14 +375,96 @@ const App: React.FC = () => {
         // Fetch profile
         const { data: userData } = await supabase.auth.getUser();
         const user = userData?.user;
+        const userId = user?.id;
+
         if (user) {
           const { data } = await supabase
             .from('profiles')
             .select('nickname, username, role')
             .eq('id', user.id)
-            .single();
-          setUserProfile(data);
+            .maybeSingle();
+
+          const defaultEmpId = user.email ? user.email.split('@')[0] : '用户';
+          setUserProfile({
+            nickname: data?.nickname || data?.username || defaultEmpId,
+            username: data?.username || defaultEmpId,
+            role: data?.role || 'admin',
+            ...data
+          });
         }
+
+        // 1. Attempt to load saved channels from LocalStorage
+        let loadedFromStorage = false;
+        try {
+          const storageKey = userId ? `manwah_saved_channels_${userId}` : 'manwah_saved_channels';
+          const countKey = userId ? `manwah_saved_channel_count_${userId}` : 'manwah_saved_channel_count';
+          
+          const rawChans = localStorage.getItem(storageKey) || localStorage.getItem('manwah_saved_channels');
+          const rawCount = localStorage.getItem(countKey) || localStorage.getItem('manwah_saved_channel_count');
+
+          if (rawChans) {
+            const parsed = JSON.parse(rawChans);
+            if (Array.isArray(parsed) && parsed.length > 0 && parsed.some((c: any) => c.images && c.images.length > 0)) {
+              setChannels(parsed);
+              loadedFromStorage = true;
+            }
+          }
+          if (rawCount) {
+            const count = parseInt(rawCount, 10);
+            if (count >= 1 && count <= 6) {
+              setVisibleChannelCount(count);
+            }
+          }
+        } catch (e) {}
+
+        // 2. Fetch user's active projects from backend
+        try {
+          const authHeaders = await getAuthHeaders();
+          const res = await fetch('/api/projects', { headers: authHeaders });
+          const pData = await res.json();
+
+          if (pData.success && pData.projects?.length > 0) {
+            const latestProject = pData.projects[0];
+            const projRes = await fetch(`/api/projects/${latestProject.id}`, { headers: authHeaders });
+            const projData = await projRes.json();
+
+            if (projData.success) {
+              setCurrentProjectDnaInfo({
+                project: projData.project,
+                dna: projData.productDna
+              });
+
+              // If no channels with images were loaded from storage, populate from project assets
+              if (!loadedFromStorage && projData.assets && projData.assets.length > 0) {
+                const updatedChannels: ProcessingChannel[] = INITIAL_CHANNELS.map((ch, idx) => {
+                  const asset = projData.assets[idx];
+                  if (asset) {
+                    const imgUrl = asset.url || asset.storage_url || (asset.objectKey ? `/api/canvases/assets/${asset.objectKey}` : (asset.storage_path ? `/api/canvases/assets/${asset.storage_path}` : ''));
+                    if (imgUrl) {
+                      const imgAttachment: ImageAttachment = {
+                        id: asset.id || `asset_${idx}`,
+                        previewUrl: imgUrl,
+                        base64Data: imgUrl.startsWith('data:') ? imgUrl.split(',')[1] : '',
+                        mimeType: asset.mime_type || 'image/png',
+                        width: asset.width || 800,
+                        height: asset.height || 600
+                      };
+                      return {
+                        ...ch,
+                        isEnabled: true,
+                        images: [imgAttachment]
+                      };
+                    }
+                  }
+                  return ch;
+                });
+                setChannels(updatedChannels);
+                setVisibleChannelCount(Math.min(6, Math.max(1, projData.assets.length)));
+              }
+            }
+          }
+        } catch (e) {}
+
       } catch (e) {
         console.error("Failed to init DB", e);
       }
@@ -908,6 +1034,21 @@ You MUST adjust the proportions. The side view width MUST be exactly ${Math.roun
           </div>
           <div className="flex items-center gap-3 md:gap-5">
             <button 
+              onClick={() => {
+                if (currentProjectDnaInfo?.project?.id) {
+                  navigate(`/creative-canvas/${currentProjectDnaInfo.project.id}`);
+                } else {
+                  navigate('/creative-canvas/new');
+                }
+              }}
+              className="flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 text-xs font-bold shadow-md transition-all cursor-pointer"
+              title="进入无限立体视觉企划画布"
+            >
+              <LayoutGrid className="w-3.5 h-3.5" /> 
+              <span>视觉企划画布</span>
+              <span className="text-[10px] bg-stone-950 text-amber-300 font-bold px-1.5 py-0.5 rounded-full">NEW</span>
+            </button>
+            <button 
               onMouseEnter={() => queryClient.prefetchQuery({ queryKey: ['user-profile'], queryFn: fetchProfile, staleTime: 1000 * 60 * 5 })}
               onClick={() => navigate('/profile')} 
               className="flex items-center gap-2 px-4 py-2 rounded-full border border-brand-gold/20 text-brand-gold text-xs font-bold hover:bg-brand-gold/5 transition-all"
@@ -1263,8 +1404,15 @@ You MUST adjust the proportions. The side view width MUST be exactly ${Math.roun
                   <Sparkles className="w-3.5 h-3.5" /> {currentProjectDnaInfo ? '管理 DNA' : 'DNA 工作室'}
                 </button>
                 <button
-                  onClick={() => navigate('/creative-canvas/new')}
+                  onClick={() => {
+                    if (currentProjectDnaInfo?.project?.id) {
+                      navigate(`/creative-canvas/${currentProjectDnaInfo.project.id}`);
+                    } else {
+                      navigate('/creative-canvas/new');
+                    }
+                  }}
                   className="w-full py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 font-bold text-xs rounded-xl transition flex items-center justify-center gap-1 shadow"
+                  title="打开视觉企划画布"
                 >
                   <LayoutGrid className="w-3.5 h-3.5" /> 视觉企划画布
                 </button>
@@ -2051,9 +2199,48 @@ You MUST adjust the proportions. The side view width MUST be exactly ${Math.roun
       <ProjectDnaModal
         isOpen={showProjectDnaModal}
         onClose={() => setShowProjectDnaModal(false)}
-        onSelectProjectAndDna={(project, dna) => {
+        onSelectProjectAndDna={async (project, dna, assets) => {
           setCurrentProjectDnaInfo({ project, dna });
           setShowProjectDnaModal(false);
+
+          let loadedAssets = assets;
+          if (!loadedAssets) {
+            try {
+              const authHeaders = await getAuthHeaders();
+              const res = await fetch(`/api/projects/${project.id}`, { headers: authHeaders });
+              const pData = await res.json();
+              if (pData.success && pData.assets) {
+                loadedAssets = pData.assets;
+              }
+            } catch (e) {}
+          }
+
+          if (loadedAssets && loadedAssets.length > 0) {
+            const updatedChannels: ProcessingChannel[] = INITIAL_CHANNELS.map((ch, idx) => {
+              const asset = loadedAssets![idx];
+              if (asset) {
+                const imgUrl = asset.url || asset.storage_url || (asset.objectKey ? `/api/canvases/assets/${asset.objectKey}` : (asset.storage_path ? `/api/canvases/assets/${asset.storage_path}` : ''));
+                if (imgUrl) {
+                  const imgAttachment: ImageAttachment = {
+                    id: asset.id || `asset_${idx}`,
+                    previewUrl: imgUrl,
+                    base64Data: imgUrl.startsWith('data:') ? imgUrl.split(',')[1] : '',
+                    mimeType: asset.mime_type || 'image/png',
+                    width: asset.width || 800,
+                    height: asset.height || 600
+                  };
+                  return {
+                    ...ch,
+                    isEnabled: true,
+                    images: [imgAttachment]
+                  };
+                }
+              }
+              return ch;
+            });
+            setChannels(updatedChannels);
+            setVisibleChannelCount(Math.min(6, Math.max(1, loadedAssets.length)));
+          }
         }}
       />
     </div>

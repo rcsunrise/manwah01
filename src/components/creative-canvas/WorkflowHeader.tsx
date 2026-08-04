@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, LayoutGrid, Check, Sparkles, Save, History, CloudCheck, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
+import { ArrowLeft, LayoutGrid, Check, Sparkles, Save, History, CloudCheck, Loader2, AlertCircle, RefreshCw, PlusCircle, Dna } from 'lucide-react';
 import { SaveStatus } from '../../types/creativeCanvas';
 
 interface WorkflowHeaderProps {
@@ -8,8 +8,13 @@ interface WorkflowHeaderProps {
   saveStatus?: SaveStatus;
   lastSavedAt?: string;
   currentRevisionNumber?: number;
+  dnaCode?: string;
+  productDnaVersionCode?: string;
+  productDnaVersionId?: string;
   onOpenSaveModal?: () => void;
   onOpenHistoryModal?: () => void;
+  onNewCanvas?: () => void;
+  onViewDnaVersion?: () => void;
 }
 
 export const WorkflowHeader: React.FC<WorkflowHeaderProps> = ({
@@ -17,8 +22,13 @@ export const WorkflowHeader: React.FC<WorkflowHeaderProps> = ({
   saveStatus = 'saved',
   lastSavedAt,
   currentRevisionNumber = 0,
+  dnaCode,
+  productDnaVersionCode,
+  productDnaVersionId,
   onOpenSaveModal,
-  onOpenHistoryModal
+  onOpenHistoryModal,
+  onNewCanvas,
+  onViewDnaVersion
 }) => {
   const navigate = useNavigate();
 
@@ -56,8 +66,26 @@ export const WorkflowHeader: React.FC<WorkflowHeaderProps> = ({
         </div>
       </div>
 
-      {/* Right: Save Status & Version Control Actions */}
+      {/* Right: Save Status, DNA Version Status & Actions */}
       <div className="flex items-center gap-2.5">
+        {/* Product DNA Version Status Pill */}
+        <div className="hidden lg:flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-[#E5E0D8] bg-[#FAF8F5]">
+          <Dna className="w-3.5 h-3.5 text-[#B28C5A]" />
+          {dnaCode && productDnaVersionCode ? (
+            <button
+              onClick={onViewDnaVersion}
+              className="flex items-center gap-1.5 text-stone-800 hover:text-[#B28C5A] transition-colors"
+              title={`DNA Version ID: ${productDnaVersionId || '未确定'}`}
+            >
+              <span className="font-mono text-[11px] font-bold text-[#B28C5A]">{dnaCode}</span>
+              <span className="font-mono text-[10px] bg-[#B28C5A]/10 text-[#8C6F43] px-1.5 py-0.2 rounded-full border border-[#B28C5A]/20 font-bold">
+                {productDnaVersionCode}
+              </span>
+            </button>
+          ) : (
+            <span className="text-[11px] text-stone-400">未绑定 Product DNA</span>
+          )}
+        </div>
         {/* Auto-save status indicator */}
         <div className="hidden sm:flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border transition-all">
           {(saveStatus === 'saving') && (
@@ -106,6 +134,18 @@ export const WorkflowHeader: React.FC<WorkflowHeaderProps> = ({
             </span>
           )}
         </div>
+
+        {/* Action: Create New Canvas */}
+        {onNewCanvas && (
+          <button
+            onClick={onNewCanvas}
+            className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold text-xs transition-all shadow-xs flex items-center gap-1.5"
+            title="清空当前状态，创建一个全新的视觉企划画布"
+          >
+            <PlusCircle className="w-3.5 h-3.5" />
+            <span>新建画布</span>
+          </button>
+        )}
 
         {/* Action: Open History Revisions Modal */}
         <button

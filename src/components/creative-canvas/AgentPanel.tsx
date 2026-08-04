@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { AgentMessage, GenerationBatch, SceneQueueItem } from '../../types/creativeCanvas';
 import { ProductVisualDNA, AgentRun } from '../../types';
+import { CopyWorkspacePanel } from './CopyWorkspacePanel';
 
 interface AgentPanelProps {
   messages: AgentMessage[];
@@ -56,6 +57,10 @@ interface AgentPanelProps {
   // C3A Props
   generatingScenes?: Set<number>;
   nodes?: any[];
+  selectedModel?: string;
+  setSelectedModel?: (m: string) => void;
+  selectedResolution?: '1K' | '2K' | '4K';
+  setSelectedResolution?: (r: '1K' | '2K' | '4K') => void;
   onGenerateSceneImage?: (screenIndex: number, reviewFeedback?: string) => void;
   onApproveSceneImage?: (screenIndex: number) => void;
   onRejectSceneImage?: (screenIndex: number, feedback: string) => void;
@@ -68,7 +73,138 @@ interface AgentPanelProps {
   onResumeBatch?: () => void;
   onCancelBatch?: () => void;
   onRetryFailedBatch?: () => void;
+
+  // C4B-1 & C4B-2 Props
+  onSelectSceneIndex?: (sceneIndex: number) => void;
+  onOpenAssetVersionsModal?: (sceneKey: string) => void;
+  dnaCode?: string;
+  productDnaVersionCode?: string;
+  productDnaVersionId?: string;
+  dnaVersions?: any[];
+  onSelectDnaVersion?: (versionId: string) => void;
+  projectId?: string;
+  canvasId?: string;
+  assetVersionId?: string;
 }
+
+export interface EngineConfigSelectorProps {
+  selectedModel: string;
+  setSelectedModel: (m: string) => void;
+  selectedResolution: '1K' | '2K' | '4K';
+  setSelectedResolution: (r: '1K' | '2K' | '4K') => void;
+}
+
+export const EngineConfigSelector: React.FC<EngineConfigSelectorProps> = ({
+  selectedModel,
+  setSelectedModel,
+  selectedResolution,
+  setSelectedResolution
+}) => {
+  const models = [
+    {
+      id: 'gemini-2.5-flash',
+      icon: '🚀',
+      title: '极速',
+      subtitle: 'v2.5 Flash',
+      activeColor: 'bg-[#B28C5A] text-white border-[#B28C5A] shadow-md'
+    },
+    {
+      id: 'gemini-3.1-flash-image',
+      icon: '⚡',
+      title: '标准',
+      subtitle: 'v3.1 Flash',
+      activeColor: 'bg-[#B28C5A] text-white border-[#B28C5A] shadow-md'
+    },
+    {
+      id: 'google/gemini-3-pro-image',
+      icon: '✨',
+      title: '旗舰',
+      subtitle: 'v3.0 Pro',
+      activeColor: 'bg-[#2C2622] text-white border-[#2C2622] shadow-md'
+    },
+    {
+      id: 'openai/gpt-image-2',
+      icon: '🌌',
+      title: 'GPT',
+      subtitle: 'image-2',
+      activeColor: 'bg-[#2C2622] text-white border-[#2C2622] shadow-md'
+    }
+  ];
+
+  return (
+    <div className="space-y-2.5 p-3 bg-[#FAF8F5] rounded-xl border border-[#E5E0D8]">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-bold text-[#2C2A29] flex items-center gap-1.5">
+          <Sliders className="w-3.5 h-3.5 text-[#B28C5A]" />
+          渲染引擎与精度档位
+        </span>
+      </div>
+
+      {/* Models Grid */}
+      <div className="space-y-1">
+        <div className="grid grid-cols-4 gap-1.5">
+          {models.map(m => {
+            const isSelected =
+              selectedModel === m.id ||
+              (m.id === 'gemini-3.1-flash-image' &&
+                (selectedModel === 'gemini-3.1-flash-image' || selectedModel === 'gemini-3.1-flash-image-preview'));
+            return (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => setSelectedModel(m.id)}
+                className={`p-1.5 rounded-xl text-center border transition-all ${
+                  isSelected
+                    ? m.activeColor
+                    : 'bg-white border-[#E5E0D8] text-stone-700 hover:border-[#B28C5A]'
+                }`}
+              >
+                <div className="text-sm mb-0.5">{m.icon}</div>
+                <div className="text-[10px] font-bold leading-tight">{m.title}</div>
+                <div className="text-[8px] opacity-70 leading-tight">{m.subtitle}</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Resolution */}
+      <div className="space-y-1">
+        <span className="text-[10px] text-stone-400 font-bold block">渲染精度 (Resolution)</span>
+        <div className="flex gap-1.5">
+          {(['1K', '2K', '4K'] as const).map(r => {
+            const isV25 = selectedModel.includes('2.5');
+            const isDisabled = isV25 && (r === '2K' || r === '4K');
+            const isSelected = selectedResolution === r;
+
+            return (
+              <button
+                key={r}
+                type="button"
+                disabled={isDisabled}
+                onClick={() => {
+                  setSelectedResolution(r);
+                  if ((r === '2K' || r === '4K') && selectedModel.includes('2.5')) {
+                    setSelectedModel('gemini-3.1-flash-image');
+                  }
+                }}
+                className={`flex-1 py-1 rounded-lg text-[10px] font-bold border transition-all ${
+                  isDisabled
+                    ? 'bg-stone-50 border-stone-200 text-stone-300 cursor-not-allowed'
+                    : isSelected
+                    ? 'bg-[#B28C5A] text-white border-[#B28C5A] shadow-xs'
+                    : 'bg-white border-[#E5E0D8] text-stone-600 hover:border-[#B28C5A]'
+                }`}
+              >
+                {r}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export const AgentPanel: React.FC<AgentPanelProps> = ({
   messages,
@@ -88,6 +224,10 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
   onReplanSingleScene,
   generatingScenes,
   nodes = [],
+  selectedModel,
+  setSelectedModel,
+  selectedResolution,
+  setSelectedResolution,
   onGenerateSceneImage,
   onApproveSceneImage,
   onRejectSceneImage,
@@ -97,11 +237,30 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
   onPauseBatch,
   onResumeBatch,
   onCancelBatch,
-  onRetryFailedBatch
+  onRetryFailedBatch,
+  onSelectSceneIndex,
+  onOpenAssetVersionsModal,
+  dnaCode,
+  productDnaVersionCode,
+  productDnaVersionId,
+  dnaVersions = [],
+  onSelectDnaVersion,
+  projectId,
+  canvasId,
+  assetVersionId
 }) => {
+  const [activeTab, setActiveTab] = useState<'scene' | 'copy' | 'typography' | 'version'>('scene');
   const [inputValue, setInputValue] = useState('');
   const [feedbackInput, setFeedbackInput] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [internalModel, setInternalModel] = useState<string>('gemini-3.1-flash-image');
+  const [internalRes, setInternalRes] = useState<'1K' | '2K' | '4K'>('2K');
+
+  const model = selectedModel || internalModel;
+  const setModel = setSelectedModel || setInternalModel;
+  const resolution = selectedResolution || internalRes;
+  const setResolution = setSelectedResolution || setInternalRes;
 
   const handleSend = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -118,10 +277,39 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
     }
   };
 
-  const selectedScreen =
-    agentRun?.plan?.screens && selectedSceneIndex && selectedSceneIndex >= 1 && selectedSceneIndex <= agentRun.plan.screens.length
-      ? agentRun.plan.screens[selectedSceneIndex - 1]
-      : null;
+  const selectedScreen = React.useMemo(() => {
+    if (selectedSceneIndex && agentRun?.plan?.screens) {
+      const found = agentRun.plan.screens.find(s => s.screenIndex === selectedSceneIndex);
+      if (found) return found;
+    }
+
+    const sceneNode = nodes.find(n => {
+      if (selectedNodeId && n.id === selectedNodeId && (n.type === 'scenePlanNode' || n.type === 'scenePlan' || n.data?.screenTitle)) {
+        return true;
+      }
+      if (selectedSceneIndex && (n.id === `scene-plan-node-${selectedSceneIndex}` || n.data?.screenIndex === selectedSceneIndex)) {
+        return true;
+      }
+      return false;
+    });
+
+    if (sceneNode?.data) {
+      const d = sceneNode.data as any;
+      return {
+        screenIndex: Number(d.screenIndex) || selectedSceneIndex || 1,
+        screenTitle: (d.screenTitle as string) || (d.title as string) || '分镜画面',
+        coreSellingPoint: (d.coreSellingPoint as string) || (d.sellingPoint as string) || '',
+        visualComposition: (d.visualComposition as string) || '',
+        lightingAndAtmosphere: (d.lightingAndAtmosphere as string) || '',
+        promptSuggestion: (d.promptSuggestion as string) || (d.prompt as string) || '',
+        aspectRatio: (d.aspectRatio as string) || '3:4'
+      };
+    }
+
+    return null;
+  }, [selectedSceneIndex, selectedNodeId, agentRun, nodes]);
+
+  const hasDna = !!activeDna || !!agentRun?.dna || nodes.some(n => n.id === 'dna-node-1' || n.type === 'productDnaNode' || n.type === 'productDna');
 
   const selectedGenImgNode = nodes.find(
     n => n.id === selectedNodeId && (n.type === 'generatedImage' || n.type === 'generatedImageNode' || n.id.startsWith('gen-img-node-'))
@@ -153,9 +341,244 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
         </div>
       </div>
 
-      {/* Selected Node Inspector View inside Right Panel */}
-      {selectedNodeId === 'nine-grid-plan-node' && agentRun?.plan && (
-        <div className="m-4 p-4 bg-white rounded-2xl border border-[#B28C5A] shadow-md shrink-0 space-y-3">
+      {/* C4B-1 Architecture Four Tab Bar */}
+      <div className="grid grid-cols-4 bg-[#F4EFE6] p-1 border-b border-[#E5E0D8] shrink-0 text-xs font-bold">
+        <button
+          type="button"
+          onClick={() => setActiveTab('scene')}
+          className={`py-2 text-center rounded-lg transition-all flex items-center justify-center gap-1 ${
+            activeTab === 'scene'
+              ? 'bg-white text-[#2C2A29] shadow-xs border border-[#E5E0D8]'
+              : 'text-stone-500 hover:text-stone-800'
+          }`}
+        >
+          <Film className="w-3.5 h-3.5 text-[#B28C5A]" />
+          <span>场景</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('copy')}
+          className={`py-2 text-center rounded-lg transition-all flex items-center justify-center gap-1 ${
+            activeTab === 'copy'
+              ? 'bg-white text-[#2C2A29] shadow-xs border border-[#E5E0D8]'
+              : 'text-stone-500 hover:text-stone-800'
+          }`}
+        >
+          <MessageSquare className="w-3.5 h-3.5 text-[#B28C5A]" />
+          <span>文案</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('typography')}
+          className={`py-2 text-center rounded-lg transition-all flex items-center justify-center gap-1 ${
+            activeTab === 'typography'
+              ? 'bg-white text-[#2C2A29] shadow-xs border border-[#E5E0D8]'
+              : 'text-stone-500 hover:text-stone-800'
+          }`}
+        >
+          <Layers className="w-3.5 h-3.5 text-[#B28C5A]" />
+          <span>排版</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('version')}
+          className={`py-2 text-center rounded-lg transition-all flex items-center justify-center gap-1 ${
+            activeTab === 'version'
+              ? 'bg-white text-[#2C2A29] shadow-xs border border-[#E5E0D8]'
+              : 'text-stone-500 hover:text-stone-800'
+          }`}
+        >
+          <Dna className="w-3.5 h-3.5 text-[#B28C5A]" />
+          <span>版本</span>
+        </button>
+      </div>
+
+      {/* Unified Scrollable Main Content Area */}
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4 custom-scrollbar">
+        {/* Quick Scene Selector Grid for Two-Way Linkage */}
+        {activeTab === 'scene' && (
+          <div className="bg-white p-2.5 rounded-2xl border border-[#E5E0D8] space-y-1.5 shadow-xs">
+            <div className="flex items-center justify-between px-1">
+              <span className="text-[11px] font-bold text-stone-600 flex items-center gap-1">
+                <LayoutGrid className="w-3.5 h-3.5 text-[#B28C5A]" />
+                场景快速切换 (scene-01 ~ 09)
+              </span>
+              <span className="text-[10px] text-stone-400 font-mono">
+                {selectedSceneIndex ? `当前: scene-0${selectedSceneIndex}` : '全视图'}
+              </span>
+            </div>
+            <div className="grid grid-cols-9 gap-1">
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(idx => {
+                const isSelected = selectedSceneIndex === idx;
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      if (onSelectSceneIndex) {
+                        onSelectSceneIndex(idx);
+                      }
+                    }}
+                    className={`py-1.5 text-center font-mono text-[10px] font-bold rounded-lg border transition-all ${
+                      isSelected
+                        ? 'bg-[#B28C5A] text-white border-[#B28C5A] shadow-xs'
+                        : 'bg-[#FAF8F5] text-stone-700 border-[#E5E0D8] hover:border-[#B28C5A]'
+                    }`}
+                    title={`选择 Scene-0${idx}`}
+                  >
+                    0{idx}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Copy Tab Content */}
+        {activeTab === 'copy' && (
+          <CopyWorkspacePanel
+            projectId={projectId || 'default-project'}
+            canvasId={canvasId || 'default-canvas'}
+            sceneIndex={selectedSceneIndex || 1}
+            sceneTitle={selectedScreen?.screenTitle}
+            coreSellingPoint={selectedScreen?.coreSellingPoint}
+            visualComposition={selectedScreen?.visualComposition}
+            productDnaVersionId={productDnaVersionId}
+            assetVersionId={assetVersionId}
+          />
+        )}
+
+        {/* Typography Tab Content */}
+        {activeTab === 'typography' && (
+          <div className="p-6 bg-white rounded-2xl border border-[#E5E0D8] text-center space-y-3 my-4">
+            <div className="w-12 h-12 rounded-2xl bg-[#F9F5EF] text-[#B28C5A] flex items-center justify-center mx-auto border border-[#E5E0D8]">
+              <Layers className="w-6 h-6" />
+            </div>
+            <h3 className="font-serif font-bold text-sm text-[#2C2A29]">真实文字图层与排版面板</h3>
+            <p className="text-xs text-stone-600 leading-relaxed font-medium">
+              真实文字图层与 Layout Version 将在 C4B-4 阶段接入。
+            </p>
+            <span className="inline-block text-[10px] font-bold text-[#B28C5A] bg-[#F9F5EF] px-3 py-1 rounded-full border border-[#E5E0D8]">
+              C4B-1 无假图层模式
+            </span>
+          </div>
+        )}
+
+        {/* Version Tab Content */}
+        {activeTab === 'version' && (
+          <div className="space-y-4">
+            {/* DNA Version Card */}
+            <div className="p-4 bg-white rounded-2xl border border-[#E5E0D8] space-y-3 shadow-xs">
+              <div className="flex items-center justify-between border-b border-[#E5E0D8] pb-2">
+                <div className="flex items-center gap-2 text-[#2C2A29]">
+                  <Dna className="w-4 h-4 text-[#B28C5A]" />
+                  <span className="font-bold text-xs">Product DNA Version (C4A-3)</span>
+                </div>
+                <span className="text-[10px] font-mono font-bold bg-[#B28C5A]/10 text-[#8C6F43] px-2 py-0.5 rounded-full border border-[#B28C5A]/20">
+                  {productDnaVersionCode || 'DNA-V001'}
+                </span>
+              </div>
+
+              <div className="space-y-1.5 text-xs text-stone-700 font-mono">
+                <div className="flex justify-between">
+                  <span className="text-stone-400">DNA 编码:</span>
+                  <span className="font-bold text-[#2C2A29]">{dnaCode || 'DNA-DEFAULT'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-stone-400">Version ID:</span>
+                  <span className="text-[10px] text-stone-600 truncate max-w-[180px]">{productDnaVersionId || '未锁定'}</span>
+                </div>
+              </div>
+
+              {dnaVersions && dnaVersions.length > 0 && (
+                <div className="pt-2 border-t border-[#E5E0D8] space-y-1.5">
+                  <span className="text-[10px] font-bold text-stone-400 block">版本历史</span>
+                  <div className="space-y-1">
+                    {dnaVersions.map((v: any) => (
+                      <button
+                        key={v.id}
+                        type="button"
+                        onClick={() => onSelectDnaVersion?.(v.id)}
+                        className={`w-full p-2 rounded-xl text-left text-xs font-mono border flex items-center justify-between transition-colors ${
+                          v.id === productDnaVersionId
+                            ? 'bg-[#F9F5EF] border-[#B28C5A] text-[#2C2A29] font-bold'
+                            : 'bg-white border-[#E5E0D8] text-stone-600 hover:border-[#B28C5A]'
+                        }`}
+                      >
+                        <span>{v.version_code || `V00${v.version_number}`}</span>
+                        <span className="text-[10px] opacity-60">{v.created_at ? new Date(v.created_at).toLocaleDateString() : '活跃'}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Asset SKU & Version Card */}
+            <div className="p-4 bg-white rounded-2xl border border-[#E5E0D8] space-y-3 shadow-xs">
+              <div className="flex items-center justify-between border-b border-[#E5E0D8] pb-2">
+                <div className="flex items-center gap-2 text-[#2C2A29]">
+                  <Layers className="w-4 h-4 text-[#B28C5A]" />
+                  <span className="font-bold text-xs">Asset SKU & Version (C4A-2)</span>
+                </div>
+                <span className="text-[10px] font-mono font-bold bg-stone-100 text-stone-700 px-2 py-0.5 rounded-full border border-stone-200">
+                  {selectedSceneIndex ? `scene-0${selectedSceneIndex}` : 'scene-01'}
+                </span>
+              </div>
+
+              <div className="space-y-1.5 text-xs text-stone-700 font-mono">
+                <div className="flex justify-between">
+                  <span className="text-stone-400">Asset SKU Code:</span>
+                  <span className="font-bold text-[#2C2A29]">
+                    {selectedGenImgNode?.data?.assetSkuCode || `SKU-SCENE-${selectedSceneIndex ? String(selectedSceneIndex).padStart(2, '0') : '01'}`}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-stone-400">当前 Asset Version:</span>
+                  <span className="font-bold text-[#B28C5A]">
+                    {selectedGenImgNode?.data?.assetVersionCode || 'V001'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-stone-400">父版本 ID (Parent):</span>
+                  <span className="text-[10px] text-stone-600 truncate max-w-[180px]">
+                    {selectedGenImgNode?.data?.parentVersionId || '无 (初始版本)'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-stone-400">绑定 DNA Version ID:</span>
+                  <span className="text-[10px] text-stone-600 truncate max-w-[180px]">
+                    {productDnaVersionId || 'DNA-V001'}
+                  </span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const key = selectedSceneIndex ? `scene-0${selectedSceneIndex}` : 'scene-01';
+                  if (onOpenAssetVersionsModal) {
+                    onOpenAssetVersionsModal(key);
+                  }
+                }}
+                className="w-full py-2 bg-[#F9F5EF] hover:bg-[#F2EBDC] text-[#B28C5A] border border-[#E5E0D8] rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>打开场景资产版本管理 modal</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Scene Tab Default Content */}
+        {activeTab === 'scene' && (
+          <>
+        {/* Selected Node Inspector View inside Right Panel */}
+        {selectedNodeId === 'nine-grid-plan-node' && agentRun?.plan && (
+          <div className="p-4 bg-white rounded-2xl border border-[#B28C5A] shadow-md space-y-3">
           <div className="flex items-center justify-between border-b border-[#E5E0D8] pb-2">
             <div className="flex items-center gap-2 text-[#2C2A29]">
               <LayoutGrid className="w-4 h-4 text-[#B28C5A]" />
@@ -184,6 +607,14 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
                 <span>重新策划全案</span>
               </button>
             </div>
+
+            {/* Model & Resolution selector */}
+            <EngineConfigSelector
+              selectedModel={model}
+              setSelectedModel={setModel}
+              selectedResolution={resolution}
+              setSelectedResolution={setResolution}
+            />
 
             {/* C3B Primary Entry Button */}
             <button
@@ -328,7 +759,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       )}
 
       {selectedScreen && (
-        <div className="m-4 p-4 bg-white rounded-2xl border border-[#B28C5A] shadow-md shrink-0 space-y-3">
+        <div className="p-4 bg-white rounded-2xl border border-[#B28C5A] shadow-md space-y-3">
           <div className="flex items-center justify-between border-b border-[#E5E0D8] pb-2">
             <div className="flex items-center gap-2 text-[#2C2A29]">
               <Film className="w-4 h-4 text-[#B28C5A]" />
@@ -387,6 +818,14 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
 
             return (
               <div className="pt-3 border-t border-[#E5E0D8] space-y-3">
+                {/* Engine & Resolution Selector */}
+                <EngineConfigSelector
+                  selectedModel={model}
+                  setSelectedModel={setModel}
+                  selectedResolution={resolution}
+                  setSelectedResolution={setResolution}
+                />
+
                 {/* Image Generation Trigger Button */}
                 <button
                   onClick={() => {
@@ -394,21 +833,28 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
                       onGenerateSceneImage(screenIndex);
                     }
                   }}
-                  disabled={isGenerating || isPlanGenerating || !activeDna}
+                  disabled={isGenerating || isPlanGenerating || !hasDna}
                   className="w-full py-2.5 px-4 bg-[#B28C5A] hover:bg-[#8C6F43] active:bg-[#6E5533] text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isGenerating ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>正在生成第 {screenIndex} 屏图片...</span>
+                      <span>正在生成第 {screenIndex} 屏海报/渲染图...</span>
                     </>
                   ) : (
                     <>
                       <ImageIcon className="w-4 h-4" />
-                      <span>{genImgNode ? '重新生成本屏图片' : '生成本屏图片'}</span>
+                      <span>{genImgNode ? '重新生成本屏海报/渲染图' : '生成本屏海报/渲染图'}</span>
                     </>
                   )}
                 </button>
+
+                {!hasDna && (
+                  <div className="flex items-start gap-1.5 p-2 bg-amber-50 text-amber-800 rounded-lg text-[11px] border border-amber-200">
+                    <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                    <span>提示：尚未提取产品 DNA，请上传产品主角图以激活海报生成。</span>
+                  </div>
+                )}
 
                 {/* Show Result & Review controls if generated */}
                 {genImgNode?.data && (
@@ -506,7 +952,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
 
       {/* Selected GeneratedImageNode Detailed Inspector */}
       {genImgData && selectedNodeId?.startsWith('gen-img-node-') && (
-        <div className="m-4 p-4 bg-white rounded-2xl border border-[#B28C5A] shadow-md shrink-0 space-y-3">
+        <div className="p-4 bg-white rounded-2xl border border-[#B28C5A] shadow-md space-y-3">
           <div className="flex items-center justify-between border-b border-[#E5E0D8] pb-2">
             <div className="flex items-center gap-2 text-[#2C2A29]">
               <ImageIcon className="w-4 h-4 text-[#B28C5A]" />
@@ -641,7 +1087,9 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
           </div>
         </div>
       )}
-      <div className="mx-4 my-2 p-3 bg-white rounded-2xl border border-[#E5E0D8] shadow-sm flex items-start gap-3 shrink-0">
+      </>
+      )}
+      <div className="p-3 bg-white rounded-2xl border border-[#E5E0D8] shadow-sm flex items-start gap-3">
         <Info className="w-4 h-4 text-[#B28C5A] shrink-0 mt-0.5" />
         <div className="text-xs text-stone-600 leading-relaxed">
           <span className="font-bold text-[#2C2A29]">企划指南：</span>
@@ -651,11 +1099,11 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
         </div>
       </div>
 
-      {/* Messages Scroll Area */}
-      <div className="flex-1 overflow-y-auto px-4 space-y-4 custom-scrollbar py-2">
-        {messages.map(msg => (
+      {/* Messages Area */}
+      <div className="space-y-4 py-1">
+        {messages.map((msg, index) => (
           <div
-            key={msg.id}
+            key={msg.id ? `${msg.id}-${index}` : `msg-${index}`}
             className={`flex items-start gap-3 ${
               msg.sender === 'user' ? 'flex-row-reverse' : ''
             }`}
@@ -694,48 +1142,108 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
           type="file"
           ref={fileInputRef}
           onChange={handleFileChange}
-          accept="image/png, image/jpeg, image/webp"
+          accept="image/png, image/jpeg, image/jpg, image/webp"
           className="hidden"
         />
 
-        <div
-          onClick={() => {
-            if (uploadState !== 'uploading' && uploadState !== 'analyzing') {
-              fileInputRef.current?.click();
-            }
-          }}
-          className={`p-4 rounded-2xl border-2 border-dashed transition-all flex flex-col items-center justify-center text-center my-3 cursor-pointer group ${
-            uploadState === 'uploading' || uploadState === 'analyzing'
-              ? 'border-amber-300 bg-amber-50/40 cursor-wait'
-              : 'border-[#E5E0D8] bg-white/70 hover:bg-white hover:border-[#B28C5A]'
-          }`}
-        >
-          {uploadState === 'uploading' && (
-            <div className="flex flex-col items-center py-2">
-              <Loader2 className="w-8 h-8 text-[#B28C5A] animate-spin mb-2" />
-              <p className="text-xs font-bold text-[#2C2A29]">正在上传产品图片...</p>
-            </div>
-          )}
+        {(() => {
+          const imgNode = nodes?.find(n => n.id === 'img-node-1' || n.type === 'productImageNode' || n.type === 'productImage');
+          const hasImage = !!imgNode?.data?.imageUrl;
+          const imageUrl = imgNode?.data?.imageUrl as string;
+          const fileName = (imgNode?.data?.fileName as string) || 'product_photo.jpg';
 
-          {uploadState === 'analyzing' && (
-            <div className="flex flex-col items-center py-2">
-              <Sparkles className="w-8 h-8 text-[#B28C5A] animate-pulse mb-2" />
-              <p className="text-xs font-bold text-[#2C2A29]">正在解析 DNA 视觉特征...</p>
-            </div>
-          )}
+          if (hasImage && uploadState === 'completed') {
+            return (
+              <div className="p-3 bg-white rounded-2xl border border-[#E5E0D8] shadow-sm my-3 space-y-2.5">
+                <div className="flex items-center justify-between text-xs font-bold text-[#2C2A29]">
+                  <span className="flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                    产品主图已就绪
+                  </span>
+                  <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                    已连通 DNA
+                  </span>
+                </div>
 
-          {uploadState !== 'uploading' && uploadState !== 'analyzing' && (
-            <>
-              <div className="w-10 h-10 rounded-2xl bg-[#F9F5EF] text-[#B28C5A] flex items-center justify-center mb-2 group-hover:scale-105 transition-transform border border-[#E5E0D8]/60">
-                <Upload className="w-5 h-5" />
+                <div className="relative w-full h-32 bg-stone-100 rounded-xl overflow-hidden border border-[#E5E0D8] flex items-center justify-center group">
+                  <img src={imageUrl} alt={fileName} className="w-full h-full object-contain p-2" />
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="px-3 py-1.5 bg-[#B28C5A] hover:bg-[#9E7A4A] text-white rounded-lg text-xs font-bold shadow-md flex items-center gap-1"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>更换</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-[10px] text-stone-500 pt-1">
+                  <span className="truncate max-w-[180px] font-mono">{fileName}</span>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-[#B28C5A] hover:underline font-bold flex items-center gap-1"
+                  >
+                    <Upload className="w-3 h-3" />
+                    <span>重新上传</span>
+                  </button>
+                </div>
               </div>
-              <p className="text-xs font-bold text-[#2C2A29] mb-0.5">
-                {uploadState === 'completed' ? '重新上传产品主角图' : '上传产品主角图'}
-              </p>
-              <p className="text-[10px] text-stone-400">支持 PNG, JPG, WEBP · 自动更新图片节点与 DNA</p>
-            </>
-          )}
-        </div>
+            );
+          }
+
+          return (
+            <div
+              onClick={() => {
+                if (uploadState !== 'uploading' && uploadState !== 'analyzing') {
+                  fileInputRef.current?.click();
+                }
+              }}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                const file = e.dataTransfer.files?.[0];
+                if (file && onUploadFile) {
+                  onUploadFile(file);
+                }
+              }}
+              className={`p-4 rounded-2xl border-2 border-dashed transition-all flex flex-col items-center justify-center text-center my-3 cursor-pointer group ${
+                uploadState === 'uploading' || uploadState === 'analyzing'
+                  ? 'border-amber-300 bg-amber-50/40 cursor-wait'
+                  : 'border-[#E5E0D8] bg-white/70 hover:bg-white hover:border-[#B28C5A]'
+              }`}
+            >
+              {uploadState === 'uploading' && (
+                <div className="flex flex-col items-center py-2">
+                  <Loader2 className="w-8 h-8 text-[#B28C5A] animate-spin mb-2" />
+                  <p className="text-xs font-bold text-[#2C2A29]">正在上传产品主图...</p>
+                </div>
+              )}
+
+              {uploadState === 'analyzing' && (
+                <div className="flex flex-col items-center py-2">
+                  <Sparkles className="w-8 h-8 text-[#B28C5A] animate-pulse mb-2" />
+                  <p className="text-xs font-bold text-[#2C2A29]">正在解析 DNA 视觉特征...</p>
+                  <p className="text-[10px] text-stone-400 mt-0.5">提取造型、色彩、材质与材质纹理</p>
+                </div>
+              )}
+
+              {uploadState !== 'uploading' && uploadState !== 'analyzing' && (
+                <>
+                  <div className="w-10 h-10 rounded-2xl bg-[#F9F5EF] text-[#B28C5A] flex items-center justify-center mb-2 group-hover:scale-105 transition-transform border border-[#E5E0D8]/60">
+                    <Upload className="w-5 h-5" />
+                  </div>
+                  <p className="text-xs font-bold text-[#2C2A29] mb-0.5">
+                    {uploadState === 'completed' ? '重新上传产品主角图' : '点击/拖拽上传产品主角图'}
+                  </p>
+                  <p className="text-[10px] text-stone-400">支持 PNG, JPG, WEBP · 支持 Ctrl+V 粘贴</p>
+                </>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Phase C2: Generate 9-Grid Plan Action Button */}
         {uploadState === 'completed' && activeDna && (
@@ -778,6 +1286,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
             </div>
           </div>
         )}
+      </div>
       </div>
 
       {/* Fixed Composer Input at Bottom */}

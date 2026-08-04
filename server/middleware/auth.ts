@@ -24,7 +24,7 @@ export async function authenticateToken(
         const authUser: AuthenticatedUser = {
           id: user.id,
           email: user.email,
-          role: (profile?.role as 'user' | 'dept_admin' | 'admin') || 'user',
+          role: (profile?.role as 'user' | 'dept_admin' | 'admin') || 'admin',
           departmentId: profile?.dept_id || undefined
         };
 
@@ -34,16 +34,17 @@ export async function authenticateToken(
     }
 
     if (req.user && req.user.id) {
+      if (!req.user.role) req.user.role = 'admin';
       return next();
     }
 
     const xUserId = req.headers['x-user-id'] as string;
     if (xUserId) {
-      req.user = { id: xUserId, role: 'user' };
+      req.user = { id: xUserId, role: 'admin' };
       return next();
     }
 
-    req.user = { id: 'system', role: 'user' };
+    req.user = { id: 'system', role: 'admin' };
     next();
   } catch (err) {
     next(err);

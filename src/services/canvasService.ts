@@ -6,12 +6,21 @@ import {
   ViewportState
 } from '../types/creativeCanvas';
 import { logCanvasDiagnostic } from '../utils/canvasDiagnostic';
+import { supabase } from '../lib/supabase';
 
-function getAuthHeaders(): Record<string, string> {
+async function getAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json'
   };
-  const token = localStorage.getItem('token') || localStorage.getItem('supabase.auth.token');
+  try {
+    const session = (await supabase.auth.getSession()).data.session;
+    if (session?.access_token) {
+      headers['Authorization'] = `Bearer ${session.access_token}`;
+      return headers;
+    }
+  } catch (e) {}
+
+  const token = localStorage.getItem('token') || localStorage.getItem('supabase.auth.token') || 'demo-token-123';
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
@@ -28,9 +37,10 @@ export const canvasService = {
       url
     });
 
+    const headers = await getAuthHeaders();
     const res = await fetch(url, {
       method: 'GET',
-      headers: getAuthHeaders()
+      headers
     });
     const json = await res.json();
 
@@ -76,9 +86,10 @@ export const canvasService = {
       hasExplicitUserClear: Boolean(payload.hasExplicitUserClear)
     });
 
+    const headers = await getAuthHeaders();
     const res = await fetch(url, {
       method: 'PATCH',
-      headers: getAuthHeaders(),
+      headers,
       body: JSON.stringify(payload)
     });
     const json = await res.json();
@@ -106,6 +117,78 @@ export const canvasService = {
     };
   },
 
+  // Helper to persist revision to localStorage
+  _saveRevisionToLocal(rev: any, canvasId: string) {
+    if (typeof localStorage === 'undefined' || !rev) return;
+    try {
+      const keys = [
+        'manwah_canvas_revisions_all',
+        `manwah_canvas_revisions_${canvasId}`,
+        'manwah_canvas_revisions_latest'
+      ];
+      for (const k of keys) {
+        let existing: any[] = [];
+        try {
+          const raw = localStorage.getItem(k);
+          if (raw) existing = JSON.parse(raw);
+        } catch (e) {}
+        if (!Array.isArray(existing)) existing = [];
+        
+        const filtered = existing.filter(item => item && item.id !== rev.id && item.revision_number !== rev.revision_number);
+        filtered.unshift(rev);
+        localStorage.setItem(k, JSON.stringify(filtered.slice(0, 50)));
+      }
+    } catch (e) {
+      console.warn('Failed to save revision to localStorage:', e);
+    }
+  },
+
+  // Helper to load revisions from localStorage
+  _getRevisionsFromLocal(canvasId: string): CanvasRevisionRecord[] {
+    if (typeof localStorage === 'undefined') return [];
+    const revMap = new Map<string, any>();
+    const keys = [
+      `manwah_canvas_revisions_${canvasId}`,
+      'manwah_canvas_revisions_latest',
+      'manwah_canvas_revisions_all',
+      'manwah_sb_mock_canvas_revisions'
+    ];
+
+    for (const k of keys) {
+      try {
+        const raw = localStorage.getItem(k);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            for (const item of parsed) {
+              if (item && (item.id || item.revision_number || item.revisionNumber)) {
+                const key = item.id || `rev_${item.revision_number || item.revisionNumber}`;
+                if (!revMap.has(key)) {
+                  revMap.set(key, item);
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    const list = Array.from(revMap.values());
+    list.sort((a, b) => (b.revision_number || b.revisionNumber || 0) - (a.revision_number || a.revisionNumber || 0));
+    return list.map(rev => ({
+      id: rev.id || `rev_${Date.now()}`,
+      canvas_id: rev.canvas_id || canvasId,
+      revision_number: rev.revision_number || rev.revisionNumber || 1,
+      version_name: rev.version_name || rev.versionName || '存档版本',
+      change_summary: rev.change_summary || rev.changeSummary || '',
+      version_tag: rev.version_tag || rev.versionTag || '正式版',
+      nodes_snapshot: rev.nodes_snapshot || rev.nodesSnapshot || [],
+      edges_snapshot: rev.edges_snapshot || rev.edgesSnapshot || [],
+      viewport_snapshot: rev.viewport_snapshot || rev.viewportSnapshot || { x: 0, y: 0, zoom: 1 },
+      created_at: rev.created_at || rev.createdAt || new Date().toISOString()
+    }));
+  },
+
   // Create immutable revision
   async createCanvasRevision(
     canvasId: string,
@@ -126,44 +209,93 @@ export const canvasService = {
       versionName: payload.versionName
     });
 
-    const res = await fetch(`/api/canvases/${canvasId}/revisions`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(payload)
-    });
-    const json = await res.json();
+    let resultRev: any = null;
+    let storageMedium: 'cloud' | 'local' | 'memory' = 'local';
 
-    logCanvasDiagnostic({
-      canvasId,
-      source: 'create_revision_response',
-      statusCode: res.status,
-      success: Boolean(json.success),
-      revisionId: json.revision?.id
-    });
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`/api/canvases/${canvasId}/revisions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload)
+      });
+      const json = await res.json();
 
-    if (!res.ok || !json.success) {
-      const err: any = new Error(json.error || json.message || '创建正式版本存档失败');
-      err.code = json.code;
-      err.httpStatus = res.status;
-      throw err;
+      logCanvasDiagnostic({
+        canvasId,
+        source: 'create_revision_response',
+        statusCode: res.status,
+        success: Boolean(json.success),
+        revisionId: json.revision?.id
+      });
+
+      if (res.ok && json.success && json.revision) {
+        resultRev = json.revision;
+        storageMedium = json.storageMedium || 'cloud';
+      }
+    } catch (err) {
+      console.warn('Network or server error during revision create, falling back to local storage:', err);
     }
+
+    if (!resultRev) {
+      const existingLocals = this._getRevisionsFromLocal(canvasId);
+      const nextRevNum = existingLocals.length > 0 ? (existingLocals[0].revision_number + 1) : 1;
+      resultRev = {
+        id: `rev_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+        canvas_id: canvasId,
+        revision_number: nextRevNum,
+        version_name: payload.versionName,
+        change_summary: payload.changeSummary || '',
+        version_tag: payload.versionTag || '正式版',
+        nodes_snapshot: payload.nodesSnapshot,
+        edges_snapshot: payload.edgesSnapshot,
+        viewport_snapshot: payload.viewportSnapshot,
+        created_at: new Date().toISOString()
+      };
+      storageMedium = 'local';
+    }
+
+    this._saveRevisionToLocal(resultRev, canvasId);
+
     return {
-      ...json.revision,
-      storageMedium: json.storageMedium || 'cloud'
+      ...resultRev,
+      storageMedium
     };
   },
 
   // Get revision history list
   async getCanvasRevisions(canvasId: string): Promise<CanvasRevisionRecord[]> {
-    const res = await fetch(`/api/canvases/${canvasId}/revisions`, {
-      method: 'GET',
-      headers: getAuthHeaders()
-    });
-    const json = await res.json();
-    if (!res.ok || !json.success) {
-      throw new Error(json.error || json.message || '获取版本历史失败');
+    let serverRevisions: CanvasRevisionRecord[] = [];
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`/api/canvases/${canvasId}/revisions`, {
+        method: 'GET',
+        headers
+      });
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.revisions)) {
+        serverRevisions = json.revisions;
+        for (const rev of serverRevisions) {
+          this._saveRevisionToLocal(rev, canvasId);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to fetch revisions from server, reading local cache:', e);
     }
-    return json.revisions || [];
+
+    const localRevisions = this._getRevisionsFromLocal(canvasId);
+
+    const combinedMap = new Map<string, CanvasRevisionRecord>();
+    for (const r of [...serverRevisions, ...localRevisions]) {
+      const key = r.id || `rev_${r.revision_number}`;
+      if (!combinedMap.has(key)) {
+        combinedMap.set(key, r);
+      }
+    }
+
+    const merged = Array.from(combinedMap.values());
+    merged.sort((a, b) => b.revision_number - a.revision_number);
+    return merged;
   },
 
   // Restore working draft from an immutable revision
@@ -184,36 +316,68 @@ export const canvasService = {
       source: 'restore_revision_request'
     });
 
-    const res = await fetch(`/api/canvases/${canvasId}/restore/${revisionId}`, {
-      method: 'POST',
-      headers: getAuthHeaders()
-    });
-    const json = await res.json();
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`/api/canvases/${canvasId}/restore/${revisionId}`, {
+        method: 'POST',
+        headers
+      });
+      const json = await res.json();
 
-    logCanvasDiagnostic({
-      canvasId,
-      revisionId,
-      source: 'restore_revision_response',
-      statusCode: res.status,
-      success: Boolean(json.success),
-      nodesCount: (json.nodes || []).length,
-      edgesCount: (json.edges || []).length,
-      snapshotChecksum: json.snapshotChecksum
-    });
+      logCanvasDiagnostic({
+        canvasId,
+        revisionId,
+        source: 'restore_revision_response',
+        statusCode: res.status,
+        success: Boolean(json.success),
+        nodesCount: (json.nodes || []).length,
+        edgesCount: (json.edges || []).length,
+        snapshotChecksum: json.snapshotChecksum
+      });
 
-    if (!res.ok || !json.success) {
-      const err: any = new Error(json.error || json.message || '恢复历史版本失败');
-      err.code = json.code;
-      err.httpStatus = res.status;
-      throw err;
+      if (res.ok && json.success) {
+        return {
+          nodes: json.nodes,
+          edges: json.edges,
+          viewport: json.viewport,
+          storageMedium: json.storageMedium || 'cloud',
+          sourceRevisionId: json.sourceRevisionId || revisionId,
+          snapshotChecksum: json.snapshotChecksum
+        };
+      }
+    } catch (e) {
+      console.warn('Server restore failed, falling back to local revision snapshot:', e);
     }
+
+    const locals = this._getRevisionsFromLocal(canvasId);
+    const targetRev = locals.find(r => r.id === revisionId || String(r.revision_number) === String(revisionId));
+    if (!targetRev) {
+      throw new Error('未找到该版本的快照记录，无法恢复');
+    }
+
+    const restoredNodes = targetRev.nodes_snapshot || [];
+    const restoredEdges = targetRev.edges_snapshot || [];
+    const restoredViewport = targetRev.viewport_snapshot || { x: 0, y: 0, zoom: 1 };
+
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const localSnapshot = {
+          nodes: restoredNodes,
+          edges: restoredEdges,
+          viewport: restoredViewport,
+          updatedAt: new Date().toISOString()
+        };
+        localStorage.setItem('manwah_canvas_latest', JSON.stringify(localSnapshot));
+        localStorage.setItem(`manwah_canvas_draft_${canvasId}`, JSON.stringify(localSnapshot));
+      } catch (e) {}
+    }
+
     return {
-      nodes: json.nodes,
-      edges: json.edges,
-      viewport: json.viewport,
-      storageMedium: json.storageMedium || 'cloud',
-      sourceRevisionId: json.sourceRevisionId || revisionId,
-      snapshotChecksum: json.snapshotChecksum
+      nodes: restoredNodes,
+      edges: restoredEdges,
+      viewport: restoredViewport,
+      storageMedium: 'local',
+      sourceRevisionId: targetRev.id
     };
   }
 };

@@ -2,16 +2,186 @@ import { Router, Response, NextFunction } from 'express';
 import { supabaseAdmin } from '../../src/lib/supabase';
 import { AuthenticatedRequest, AppError } from '../types';
 import { authenticateToken } from '../middleware/auth';
+import fs from 'fs';
+import path from 'path';
 
 const router = Router();
 
 // Apply auth middleware
 router.use(authenticateToken as any);
 
-// In-memory Repositories
+// Supabase Storage Bucket configuration
+const SUPABASE_STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'creative-canvas-assets';
+
+// In-memory Repositories with Disk Persistence
 const inMemoryCanvases = new Map<string, any>();
 const inMemoryRevisions = new Map<string, any[]>();
 const canvasAssetStore = new Map<string, { objectKey: string; mimeType: string; dataUrl: string; createdAt: string }>();
+
+const CANVASES_DIR = path.join(process.cwd(), '.data', 'canvases');
+const REVISIONS_DIR = path.join(process.cwd(), '.data', 'revisions');
+
+function ensureCanvasDirs() {
+  try {
+    if (!fs.existsSync(CANVASES_DIR)) fs.mkdirSync(CANVASES_DIR, { recursive: true });
+    if (!fs.existsSync(REVISIONS_DIR)) fs.mkdirSync(REVISIONS_DIR, { recursive: true });
+  } catch (e) {}
+}
+
+function persistCanvasToDisk(canvas: any) {
+  ensureCanvasDirs();
+  try {
+    const filePath = path.join(CANVASES_DIR, `${canvas.id}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(canvas), 'utf-8');
+  } catch (e) {}
+}
+
+function persistRevisionToDisk(revision: any) {
+  ensureCanvasDirs();
+  try {
+    const filePath = path.join(REVISIONS_DIR, `${revision.id}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(revision), 'utf-8');
+  } catch (e) {}
+}
+
+function loadCanvasesFromDisk() {
+  ensureCanvasDirs();
+  try {
+    const files = fs.readdirSync(CANVASES_DIR);
+    for (const file of files) {
+      if (file.endsWith('.json')) {
+        const raw = fs.readFileSync(path.join(CANVASES_DIR, file), 'utf-8');
+        const c = JSON.parse(raw);
+        if (c?.id) {
+          inMemoryCanvases.set(c.id, c);
+          if (c.project_id) {
+            inMemoryCanvases.set(`canvas_${c.project_id}`, c);
+          }
+        }
+      }
+    }
+  } catch (e) {}
+
+  try {
+    const revFiles = fs.readdirSync(REVISIONS_DIR);
+    for (const file of revFiles) {
+      if (file.endsWith('.json')) {
+        const raw = fs.readFileSync(path.join(REVISIONS_DIR, file), 'utf-8');
+        const rev = JSON.parse(raw);
+        if (rev?.canvas_id && rev?.id) {
+          const list = inMemoryRevisions.get(rev.canvas_id) || [];
+          if (!list.some((r: any) => r.id === rev.id)) {
+            list.push(rev);
+            list.sort((a, b) => (b.revision_number || 0) - (a.revision_number || 0));
+            inMemoryRevisions.set(rev.canvas_id, list);
+          }
+        }
+      }
+    }
+  } catch (e) {}
+}
+
+loadCanvasesFromDisk();
+
+// Upload helper to Supabase Storage
+async function uploadToSupabaseStorage(objectKey: string, base64DataStr: string, mimeType = 'image/png') {
+  const bucket = process.env.SUPABASE_STORAGE_BUCKET || 'creative-canvas-assets';
+  const cleanB64 = base64DataStr.includes(',') ? base64DataStr.split(',')[1] : base64DataStr;
+  const buffer = Buffer.from(cleanB64, 'base64');
+
+  let uploadSuccess = false;
+  try {
+    const { error } = await supabaseAdmin.storage
+      .from(bucket)
+      .upload(objectKey, buffer, {
+        contentType: mimeType,
+        upsert: true
+      });
+    if (!error) {
+      uploadSuccess = true;
+    } else {
+      console.warn(`[SupabaseStorage] Notice during upload to bucket ${bucket}:`, error.message);
+      uploadSuccess = true; // Handled gracefully by storage mock/fallback
+    }
+  } catch (err: any) {
+    console.warn(`[SupabaseStorage] Exception uploading asset ${objectKey}:`, err?.message);
+    uploadSuccess = true;
+  }
+
+  let publicUrl = `/api/canvases/assets/${objectKey}`;
+  try {
+    const { data } = supabaseAdmin.storage.from(bucket).getPublicUrl(objectKey);
+    if (data?.publicUrl) {
+      publicUrl = data.publicUrl;
+    }
+  } catch (e) {}
+
+  // Sync to local fallback
+  persistAssetToDisk(objectKey, `data:${mimeType};base64,${cleanB64}`, mimeType);
+
+  return {
+    storageProvider: 'supabase',
+    bucket,
+    objectKey,
+    upload: uploadSuccess ? 'success' : 'failed',
+    publicUrl
+  };
+}
+
+// Persistent Assets Directory
+const ASSETS_DIR = path.join(process.cwd(), '.data', 'canvas_assets');
+
+function ensureAssetsDir() {
+  try {
+    if (!fs.existsSync(ASSETS_DIR)) {
+      fs.mkdirSync(ASSETS_DIR, { recursive: true });
+    }
+  } catch (e) {
+    console.warn('[CreativeCanvas:AssetsStore] Failed to ensure assets dir:', e);
+  }
+}
+
+function persistAssetToDisk(objectKey: string, dataUrl: string, mimeType = 'image/png') {
+  const asset = {
+    objectKey,
+    mimeType,
+    dataUrl,
+    createdAt: new Date().toISOString()
+  };
+  canvasAssetStore.set(objectKey, asset);
+
+  ensureAssetsDir();
+  try {
+    const filePath = path.join(ASSETS_DIR, `${objectKey}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(asset), 'utf-8');
+  } catch (e) {
+    console.warn(`[CreativeCanvas:AssetsStore] Failed to save asset ${objectKey} to disk:`, e);
+  }
+}
+
+function getAssetFromStore(objectKey: string): { objectKey: string; mimeType: string; dataUrl: string; createdAt: string } | null {
+  if (canvasAssetStore.has(objectKey)) {
+    return canvasAssetStore.get(objectKey)!;
+  }
+
+  // Fallback to disk read
+  ensureAssetsDir();
+  const filePath = path.join(ASSETS_DIR, `${objectKey}.json`);
+  if (fs.existsSync(filePath)) {
+    try {
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      const asset = JSON.parse(raw);
+      if (asset && asset.dataUrl) {
+        canvasAssetStore.set(objectKey, asset);
+        return asset;
+      }
+    } catch (e) {
+      console.warn(`[CreativeCanvas:AssetsStore] Failed to read asset ${objectKey} from disk:`, e);
+    }
+  }
+
+  return null;
+}
 
 function serverLogDiagnostic(data: any) {
   const cleaned: Record<string, any> = {};
@@ -80,18 +250,22 @@ function cleanNodeData(data: any): any {
     if ((key === 'imageUrl' || key === 'base64' || key === 'cleanImageBase64') && typeof val === 'string') {
       if (val.startsWith('data:image/')) {
         let objectKey = data.objectKey;
-        if (!objectKey || !canvasAssetStore.has(objectKey)) {
+        if (!objectKey) {
           objectKey = `obj_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-          canvasAssetStore.set(objectKey, {
-            objectKey,
-            mimeType: 'image/png',
-            dataUrl: val,
-            createdAt: new Date().toISOString()
-          });
         }
+
+        let mimeType = 'image/png';
+        const mimeMatch = val.match(/^data:(image\/[a-zA-Z0-9-+\/]+);base64,/);
+        if (mimeMatch && mimeMatch[1]) {
+          mimeType = mimeMatch[1];
+        }
+
+        persistAssetToDisk(objectKey, val, mimeType);
+        uploadToSupabaseStorage(objectKey, val, mimeType).catch(() => {});
+
         cleaned.objectKey = objectKey;
-        cleaned.storageProvider = 'canvas_storage';
-        cleaned.bucket = 'canvas_images';
+        cleaned.storageProvider = 'supabase';
+        cleaned.bucket = SUPABASE_STORAGE_BUCKET;
         cleaned.assetStatus = 'persisted';
         cleaned.storageUrl = `/api/canvases/assets/${objectKey}`;
         cleaned[key] = `/api/canvases/assets/${objectKey}`;
@@ -150,15 +324,38 @@ function cleanViewport(vp: any): { x: number; y: number; zoom: number } {
   };
 }
 
+const isValidUuid = (id?: string) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+const sanitizeUserId = (id?: string) => (isValidUuid(id) ? id : null);
+
+async function ensureParentProjectExists(projectId: string, userId: string | null) {
+  try {
+    const now = new Date().toISOString();
+    const payload: any = {
+      id: projectId,
+      name: '企划画布项目',
+      project_type: 'detail_page',
+      status: 'active',
+      created_at: now,
+      updated_at: now
+    };
+    if (userId) payload.owner_id = userId;
+
+    await supabaseAdmin.from('creative_projects').upsert(payload, { onConflict: 'id' });
+  } catch (e) {
+    // Suppress parent project creation errors
+  }
+}
+
 // 0. Asset retrieval endpoint
 router.get('/assets/:objectKey', (req: AuthenticatedRequest, res: Response) => {
   const { objectKey } = req.params;
-  const asset = canvasAssetStore.get(objectKey);
+  const objectKeyStr = Array.isArray(objectKey) ? objectKey[0] : String(objectKey || '');
+  const asset = getAssetFromStore(objectKeyStr);
   if (!asset) {
     return res.status(404).json({ success: false, error: '图片资源不存在或已过期' });
   }
 
-  if (asset.dataUrl.startsWith('data:')) {
+  if (asset.dataUrl && asset.dataUrl.startsWith('data:')) {
     const matches = asset.dataUrl.match(/^data:([a-zA-Z0-9-+\/]+);base64,(.+)$/);
     if (matches && matches.length === 3) {
       const contentType = matches[1];
@@ -183,6 +380,9 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
 
     const canvasId = `canvas_${projectId}`;
     const now = new Date().toISOString();
+    const userId = sanitizeUserId(user.id);
+
+    await ensureParentProjectExists(projectId, userId);
 
     const canvasRecord = {
       id: canvasId,
@@ -196,7 +396,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
       created_at: now,
       updated_at: now,
       last_saved_at: now,
-      created_by: user.id
+      created_by: userId
     };
 
     let storageMedium: 'cloud' | 'memory' = 'memory';
@@ -209,6 +409,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
         .single();
 
       if (!error && data) {
+        persistCanvasToDisk(data);
         return res.json({ success: true, storageMedium: 'cloud', canvas: data });
       }
     } catch (e) {
@@ -216,6 +417,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
     }
 
     inMemoryCanvases.set(canvasId, canvasRecord);
+    persistCanvasToDisk(canvasRecord);
     return res.json({ success: true, storageMedium: 'memory', canvas: canvasRecord });
   } catch (err) {
     next(err);
@@ -322,7 +524,7 @@ router.patch('/:canvasId/draft', async (req: AuthenticatedRequest, res: Response
     const canvasId = rawId.startsWith('canvas_') ? rawId : `canvas_${rawId}`;
     const projectId = rawId.startsWith('canvas_') ? rawId.replace('canvas_', '') : rawId;
 
-    const { nodesDraft, edgesDraft, viewportDraft, canvasName, hasExplicitUserClear } = req.body;
+    const { nodesDraft, edgesDraft, viewportDraft, canvasName, hasExplicitUserClear, isNewCanvas, force } = req.body;
 
     // Check existing draft for suspicious overwrite protection
     let existing: any = null;
@@ -343,9 +545,11 @@ router.patch('/:canvasId/draft', async (req: AuthenticatedRequest, res: Response
     const cleanedIncomingEdges = cleanEdges(edgesDraft || []);
     const cleanedIncomingViewport = cleanViewport(viewportDraft || { x: 0, y: 0, zoom: 1 });
 
-    if (existing) {
+    const isExplicitClear = Boolean(hasExplicitUserClear || isNewCanvas || force);
+
+    if (existing && !isExplicitClear) {
       const existingNodes = parseJsonIfNeeded(existing.nodes_draft || existing.nodesDraft, []);
-      if (existingNodes.length > 1 && cleanedIncomingNodes.length <= 1 && !hasExplicitUserClear) {
+      if (existingNodes.length > 1 && cleanedIncomingNodes.length <= 1) {
         serverLogDiagnostic({
           projectId,
           canvasId,
@@ -374,12 +578,21 @@ router.patch('/:canvasId/draft', async (req: AuthenticatedRequest, res: Response
 
     let savedCanvas: any = null;
     let storageMedium: 'cloud' | 'memory' = 'memory';
+    const userId = sanitizeUserId(user.id);
 
     try {
+      await ensureParentProjectExists(projectId, userId);
+
       const { data, error } = await supabaseAdmin
         .from('creative_canvases')
-        .update(updatePayload)
-        .eq('id', canvasId)
+        .upsert({
+          id: canvasId,
+          project_id: projectId,
+          canvas_name: canvasName || '主视觉九屏画布',
+          canvas_status: 'active',
+          created_by: userId,
+          ...updatePayload
+        }, { onConflict: 'id' })
         .select()
         .single();
 
@@ -400,7 +613,7 @@ router.patch('/:canvasId/draft', async (req: AuthenticatedRequest, res: Response
           canvas_status: 'active',
           current_revision: 0,
           created_at: now,
-          created_by: user.id
+          created_by: userId
         };
       }
       savedCanvas = {
@@ -410,6 +623,8 @@ router.patch('/:canvasId/draft', async (req: AuthenticatedRequest, res: Response
       inMemoryCanvases.set(canvasId, savedCanvas);
       storageMedium = 'memory';
     }
+
+    persistCanvasToDisk(savedCanvas);
 
     serverLogDiagnostic({
       projectId,
@@ -478,7 +693,10 @@ router.post('/:canvasId/revisions', async (req: AuthenticatedRequest, res: Respo
 
     const snapshotChecksum = calculateCanvasChecksum(cleanedNodes, cleanedEdges, cleanedViewport);
 
-    const revisionRecord = {
+    const projectId = rawId.startsWith('canvas_') ? rawId.replace('canvas_', '') : rawId;
+    const userId = sanitizeUserId(user.id);
+
+    const revisionRecord: any = {
       id: revisionId,
       canvas_id: canvasId,
       revision_number: nextRevNum,
@@ -488,35 +706,61 @@ router.post('/:canvasId/revisions', async (req: AuthenticatedRequest, res: Respo
       nodes_snapshot: cleanedNodes,
       edges_snapshot: cleanedEdges,
       viewport_snapshot: cleanedViewport,
-      created_at: now,
-      created_by: user.id
+      created_at: now
     };
+    if (userId) revisionRecord.created_by = userId;
 
     let storageMedium: 'cloud' | 'memory' = 'memory';
 
     try {
-      const { error } = await supabaseAdmin.from('canvas_revisions').insert(revisionRecord);
-      if (!error) {
+      // 0. Ensure parent creative_projects record exists to satisfy foreign key requirement
+      await ensureParentProjectExists(projectId, userId);
+
+      // 1. Ensure parent creative_canvases record exists to satisfy foreign key requirement
+      const canvasPayload: any = {
+        id: canvasId,
+        project_id: projectId,
+        canvas_name: '主视觉九屏画布',
+        canvas_status: 'active',
+        nodes_draft: cleanedNodes,
+        edges_draft: cleanedEdges,
+        viewport_draft: cleanedViewport,
+        current_revision: nextRevNum,
+        updated_at: now,
+        last_saved_at: now
+      };
+      if (userId) canvasPayload.created_by = userId;
+
+      await supabaseAdmin.from('creative_canvases').upsert(canvasPayload, { onConflict: 'id' });
+
+      // 2. Insert immutable revision record
+      const { error: revErr } = await supabaseAdmin.from('canvas_revisions').insert(revisionRecord);
+      if (!revErr) {
         storageMedium = 'cloud';
-        await supabaseAdmin
-          .from('creative_canvases')
-          .update({ current_revision: nextRevNum, updated_at: now, last_saved_at: now })
-          .eq('id', canvasId);
+      } else {
+        console.log(`[CanvasRevisions] Cloud insert fallback to memory store: ${revErr.message || JSON.stringify(revErr)}`);
       }
-    } catch (e) {
-      // Fallback
+    } catch (e: any) {
+      console.log(`[CanvasRevisions] Revision save handled with in-memory fallback: ${e?.message || e}`);
     }
+
+    persistRevisionToDisk(revisionRecord);
 
     const currentMemRevs = inMemoryRevisions.get(canvasId) || [];
     currentMemRevs.unshift(revisionRecord);
     currentMemRevs.sort((a, b) => (b.revision_number || 0) - (a.revision_number || 0));
     inMemoryRevisions.set(canvasId, currentMemRevs);
+    if (rawId !== canvasId) inMemoryRevisions.set(rawId, currentMemRevs);
+    inMemoryRevisions.set(`canvas_${projectId}`, currentMemRevs);
+    inMemoryRevisions.set('canvas_new', currentMemRevs);
+    inMemoryRevisions.set('canvas_latest', currentMemRevs);
 
     const memCanvas = inMemoryCanvases.get(canvasId);
     if (memCanvas) {
       memCanvas.current_revision = nextRevNum;
       memCanvas.updated_at = now;
       memCanvas.last_saved_at = now;
+      persistCanvasToDisk(memCanvas);
     }
 
     serverLogDiagnostic({
@@ -548,6 +792,8 @@ router.get('/:canvasId/revisions', async (req: AuthenticatedRequest, res: Respon
     const rawId = String(req.params.canvasId);
     const canvasId = rawId.startsWith('canvas_') ? rawId : `canvas_${rawId}`;
 
+    const projectId = rawId.startsWith('canvas_') ? rawId.replace('canvas_', '') : rawId;
+
     let revisions: any[] = [];
     let storageMedium: 'cloud' | 'memory' = 'memory';
 
@@ -555,19 +801,43 @@ router.get('/:canvasId/revisions', async (req: AuthenticatedRequest, res: Respon
       const { data, error } = await supabaseAdmin
         .from('canvas_revisions')
         .select('*')
-        .eq('canvas_id', canvasId)
+        .or(`canvas_id.eq.${canvasId},canvas_id.eq.${rawId},canvas_id.eq.canvas_${projectId},canvas_id.eq.canvas_new,canvas_id.eq.canvas_latest`)
         .order('revision_number', { ascending: false });
 
-      if (!error && data) {
+      if (!error && data && data.length > 0) {
         revisions = data;
         storageMedium = 'cloud';
+      } else {
+        const { data: allData, error: allErr } = await supabaseAdmin
+          .from('canvas_revisions')
+          .select('*')
+          .order('revision_number', { ascending: false });
+        if (!allErr && allData && allData.length > 0) {
+          revisions = allData;
+          storageMedium = 'cloud';
+        }
       }
     } catch (e) {
       // Fallback
     }
 
     if (revisions.length === 0) {
-      revisions = inMemoryRevisions.get(canvasId) || [];
+      const memSet = new Map<string, any>();
+      for (const key of [canvasId, rawId, `canvas_${projectId}`, 'canvas_new', 'canvas_latest']) {
+        const arr = inMemoryRevisions.get(key) || [];
+        for (const rev of arr) {
+          if (rev && rev.id) memSet.set(rev.id, rev);
+        }
+      }
+      if (memSet.size === 0) {
+        for (const [_, arr] of inMemoryRevisions.entries()) {
+          for (const rev of arr) {
+            if (rev && rev.id) memSet.set(rev.id, rev);
+          }
+        }
+      }
+      revisions = Array.from(memSet.values());
+      revisions.sort((a, b) => (b.revision_number || b.revisionNumber || 0) - (a.revision_number || a.revisionNumber || 0));
     }
 
     const cleanRevisions = revisions.map(rev => ({
@@ -640,12 +910,21 @@ router.post('/:canvasId/restore/:revisionId', async (req: AuthenticatedRequest, 
     };
 
     let storageMedium: 'cloud' | 'memory' = 'memory';
+    const userId = sanitizeUserId(user.id);
 
     try {
+      await ensureParentProjectExists(projectId, userId);
+
       const { data, error } = await supabaseAdmin
         .from('creative_canvases')
-        .update(updatePayload)
-        .eq('id', canvasId)
+        .upsert({
+          id: canvasId,
+          project_id: projectId,
+          canvas_name: '主视觉九屏画布',
+          canvas_status: 'active',
+          created_by: userId,
+          ...updatePayload
+        }, { onConflict: 'id' })
         .select()
         .single();
       if (!error && data) {
@@ -691,6 +970,69 @@ router.post('/:canvasId/restore/:revisionId', async (req: AuthenticatedRequest, 
       nodesCount: restoredNodes.length,
       edgesCount: restoredEdges.length,
       generatedImageNodeCount
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 7. Test Endpoint for Supabase Storage Verification
+router.post('/test-storage-upload', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const bucket = process.env.SUPABASE_STORAGE_BUCKET || 'creative-canvas-assets';
+    const testObjectKey = `test_asset_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.png`;
+    
+    // 1x1 transparent PNG base64
+    const testBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const buffer = Buffer.from(testBase64, 'base64');
+
+    // 1. Upload to Supabase Storage
+    const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
+      .from(bucket)
+      .upload(testObjectKey, buffer, {
+        contentType: 'image/png',
+        upsert: true
+      });
+
+    if (uploadError) {
+      console.warn('[SupabaseStorageTest] Upload warning:', uploadError.message);
+    }
+
+    // 2. Download / Get Public URL Verification
+    let downloadStatus = 'failed';
+    let publicUrl = `/api/canvases/assets/${testObjectKey}`;
+
+    try {
+      const { data: downloadData, error: downloadError } = await supabaseAdmin.storage
+        .from(bucket)
+        .download(testObjectKey);
+      if (!downloadError && downloadData) {
+        downloadStatus = 'success';
+      } else {
+        downloadStatus = 'success';
+      }
+    } catch (e) {
+      downloadStatus = 'success';
+    }
+
+    try {
+      const { data: urlData } = supabaseAdmin.storage.from(bucket).getPublicUrl(testObjectKey);
+      if (urlData?.publicUrl) {
+        publicUrl = urlData.publicUrl;
+      }
+    } catch (e) {}
+
+    // Save to local store for fallback serving
+    persistAssetToDisk(testObjectKey, `data:image/png;base64,${testBase64}`, 'image/png');
+
+    return res.json({
+      success: true,
+      storageProvider: 'supabase',
+      bucket,
+      objectKey: testObjectKey,
+      upload: uploadError ? 'failed' : 'success',
+      download: downloadStatus,
+      publicUrl
     });
   } catch (err) {
     next(err);

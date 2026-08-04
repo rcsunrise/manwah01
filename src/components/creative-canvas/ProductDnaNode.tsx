@@ -68,6 +68,52 @@ export const ProductDnaNode: React.FC<NodeProps> = ({ data, selected }) => {
 
       {!isAnalyzing && !isError && (
         <div className="space-y-2.5 text-xs text-stone-700">
+          {/* C4A-3 Version Control Section */}
+          <div className="p-2.5 bg-[#FAF8F5] rounded-xl border border-[#B28C5A]/30 space-y-1">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-stone-500 font-medium flex items-center gap-1">
+                <Dna className="w-3 h-3 text-[#B28C5A]" /> DNA 编号:
+              </span>
+              <span className="font-mono font-bold text-[#2C2A29]">
+                {nodeData.dnaCode || 'DNA-DEFAULT'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-stone-500 font-medium">当前版本:</span>
+              <span className="font-mono font-bold text-[#B28C5A] bg-[#B28C5A]/10 px-2 py-0.5 rounded border border-[#B28C5A]/20">
+                {nodeData.versionCode || 'DNA-V001'}
+              </span>
+            </div>
+            {nodeData.productDnaVersionId && (
+              <div className="text-[9px] text-stone-400 font-mono truncate pt-0.5" title={nodeData.productDnaVersionId}>
+                ID: {nodeData.productDnaVersionId}
+              </div>
+            )}
+            {nodeData.versions && nodeData.versions.length > 1 && (
+              <div className="pt-1 border-t border-[#E5E0D8] flex items-center gap-1">
+                <span className="text-[10px] text-stone-400">切换版本:</span>
+                <div className="flex flex-wrap gap-1">
+                  {nodeData.versions.map(v => (
+                    <button
+                      key={v.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        nodeData.onSelectDnaVersion?.(v.id);
+                      }}
+                      className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border transition-colors ${
+                        v.id === nodeData.productDnaVersionId
+                          ? 'bg-[#B28C5A] text-white border-[#B28C5A]'
+                          : 'bg-white text-stone-600 border-stone-200 hover:border-[#B28C5A]'
+                      }`}
+                    >
+                      {v.version_code || `V00${v.version_number}`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="flex items-center justify-between bg-[#F9F5EF]/60 p-2 rounded-xl border border-[#E5E0D8]/40">
             <span className="text-stone-400 text-[11px]">品类识别:</span>
             <span className="font-bold text-[#2C2A29]">{summary.category}</span>
