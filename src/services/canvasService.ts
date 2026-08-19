@@ -7,6 +7,7 @@ import {
 } from '../types/creativeCanvas';
 import { logCanvasDiagnostic } from '../utils/canvasDiagnostic';
 import { supabase } from '../lib/supabase';
+import { buildRevisionManifest, cleanNodeDataForManifest, RevisionManifest } from './manifestService';
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
@@ -16,15 +17,21 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
     const session = (await supabase.auth.getSession()).data.session;
     if (session?.access_token) {
       headers['Authorization'] = `Bearer ${session.access_token}`;
-      return headers;
     }
   } catch (e) {}
-
-  const token = localStorage.getItem('token') || localStorage.getItem('supabase.auth.token') || 'demo-token-123';
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
   return headers;
+}
+
+export interface PersistenceHealthResult {
+  ready: boolean;
+  schemaVersion: string;
+  storageMedium: string;
+  checks: {
+    creativeProjects: string;
+    creativeCanvases: string;
+    agentConversations: string;
+    agentMessages: string;
+  };
 }
 
 export const canvasService = {
@@ -61,7 +68,11 @@ export const canvasService = {
       err.httpStatus = res.status;
       throw err;
     }
-    return json.canvas;
+    const canvas = json.canvas;
+    if (canvas) {
+      canvas.storageMedium = json.storageMedium || 'cloud';
+    }
+    return canvas;
   },
 
   // Save current working draft with auto-save
@@ -121,6 +132,20 @@ export const canvasService = {
   _saveRevisionToLocal(rev: any, canvasId: string) {
     if (typeof localStorage === 'undefined' || !rev) return;
     try {
+      const safeNodes = (rev.nodes_snapshot || []).map((n: any) => ({
+        id: String(n.id || ''),
+        type: String(n.type || 'default'),
+        position: n.position || { x: 0, y: 0 },
+        width: n.width,
+        height: n.height,
+        data: cleanNodeDataForManifest(n.data)
+      }));
+
+      const safeRev = {
+        ...rev,
+        nodes_snapshot: safeNodes
+      };
+
       const keys = [
         'manwah_canvas_revisions_all',
         `manwah_canvas_revisions_${canvasId}`,
@@ -134,8 +159,8 @@ export const canvasService = {
         } catch (e) {}
         if (!Array.isArray(existing)) existing = [];
         
-        const filtered = existing.filter(item => item && item.id !== rev.id && item.revision_number !== rev.revision_number);
-        filtered.unshift(rev);
+        const filtered = existing.filter(item => item && item.id !== safeRev.id && item.revision_number !== safeRev.revision_number);
+        filtered.unshift(safeRev);
         localStorage.setItem(k, JSON.stringify(filtered.slice(0, 50)));
       }
     } catch (e) {
@@ -189,35 +214,63 @@ export const canvasService = {
     }));
   },
 
-  // Create immutable revision
+  // Create immutable revision (C4A-4: Decoupled snapshot creation)
   async createCanvasRevision(
     canvasId: string,
     payload: {
       versionName: string;
       changeSummary?: string;
       versionTag?: string;
-      nodesSnapshot: SerializableNode[];
-      edgesSnapshot: SerializableEdge[];
-      viewportSnapshot: ViewportState;
+      manifest?: RevisionManifest;
+      nodesSnapshot?: SerializableNode[];
+      edgesSnapshot?: SerializableEdge[];
+      viewportSnapshot?: ViewportState;
+      assetVersionIds?: string[];
     }
-  ): Promise<CanvasRevisionRecord & { storageMedium?: 'cloud' | 'local' | 'memory' }> {
+  ): Promise<CanvasRevisionRecord & { storageMedium?: 'cloud' | 'local' | 'memory'; status?: string; assetTotal?: number; assetReadyCount?: number; pendingAssetCount?: number }> {
+    const manifest = payload.manifest || buildRevisionManifest({
+      workspaceId: canvasId,
+      nodes: payload.nodesSnapshot || [],
+      edges: payload.edgesSnapshot || [],
+      viewport: payload.viewportSnapshot
+    });
+
+    const sanitizedNodes = manifest.nodes;
+    const sanitizedEdges = manifest.edges;
+    const sanitizedViewport = manifest.viewport;
+
     logCanvasDiagnostic({
       canvasId,
       source: 'create_revision_request',
-      nodesCount: payload.nodesSnapshot.length,
-      edgesCount: payload.edgesSnapshot.length,
+      nodesCount: sanitizedNodes.length,
+      edgesCount: sanitizedEdges.length,
       versionName: payload.versionName
     });
 
     let resultRev: any = null;
     let storageMedium: 'cloud' | 'local' | 'memory' = 'local';
+    let status = 'ready';
+    let assetTotal = 0;
+    let assetReadyCount = 0;
+    let pendingAssetCount = 0;
+
+    const requestBody = {
+      versionName: payload.versionName,
+      changeSummary: payload.changeSummary || '',
+      versionTag: payload.versionTag || '正式版',
+      manifest,
+      nodesSnapshot: sanitizedNodes,
+      edgesSnapshot: sanitizedEdges,
+      viewportSnapshot: sanitizedViewport,
+      assetVersionIds: payload.assetVersionIds
+    };
 
     try {
       const headers = await getAuthHeaders();
       const res = await fetch(`/api/canvases/${canvasId}/revisions`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(payload)
+        body: JSON.stringify(requestBody)
       });
       const json = await res.json();
 
@@ -232,6 +285,10 @@ export const canvasService = {
       if (res.ok && json.success && json.revision) {
         resultRev = json.revision;
         storageMedium = json.storageMedium || 'cloud';
+        status = json.status || json.revision.status || 'ready';
+        assetTotal = json.assetTotal || 0;
+        assetReadyCount = json.assetReadyCount || 0;
+        pendingAssetCount = json.pendingAssetCount || 0;
       }
     } catch (err) {
       console.warn('Network or server error during revision create, falling back to local storage:', err);
@@ -247,9 +304,11 @@ export const canvasService = {
         version_name: payload.versionName,
         change_summary: payload.changeSummary || '',
         version_tag: payload.versionTag || '正式版',
-        nodes_snapshot: payload.nodesSnapshot,
-        edges_snapshot: payload.edgesSnapshot,
-        viewport_snapshot: payload.viewportSnapshot,
+        status: 'ready',
+        manifest,
+        nodes_snapshot: sanitizedNodes,
+        edges_snapshot: sanitizedEdges,
+        viewport_snapshot: sanitizedViewport,
         created_at: new Date().toISOString()
       };
       storageMedium = 'local';
@@ -259,7 +318,11 @@ export const canvasService = {
 
     return {
       ...resultRev,
-      storageMedium
+      storageMedium,
+      status,
+      assetTotal,
+      assetReadyCount,
+      pendingAssetCount
     };
   },
 
@@ -379,5 +442,41 @@ export const canvasService = {
       storageMedium: 'local',
       sourceRevisionId: targetRev.id
     };
+  },
+
+  // Verify Supabase persistence health across required tables
+  async getPersistenceHealth(): Promise<PersistenceHealthResult> {
+    const url = '/api/health/persistence';
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(url, {
+        method: 'GET',
+        headers
+      });
+      const json = await res.json();
+      return {
+        ready: Boolean(json.ready),
+        schemaVersion: json.schemaVersion || 'BASELINE-M1-R1',
+        storageMedium: json.storageMedium || 'unknown',
+        checks: {
+          creativeProjects: json.checks?.creativeProjects || 'unknown',
+          creativeCanvases: json.checks?.creativeCanvases || 'unknown',
+          agentConversations: json.checks?.agentConversations || 'unknown',
+          agentMessages: json.checks?.agentMessages || 'unknown'
+        }
+      };
+    } catch (err: any) {
+      return {
+        ready: false,
+        schemaVersion: 'BASELINE-M1-R1',
+        storageMedium: 'unreachable',
+        checks: {
+          creativeProjects: 'error',
+          creativeCanvases: 'error',
+          agentConversations: 'error',
+          agentMessages: 'error'
+        }
+      };
+    }
   }
 };

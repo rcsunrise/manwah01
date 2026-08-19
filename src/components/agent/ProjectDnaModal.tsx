@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { CreativeProject, ProductVisualDNA, ProjectAsset, AgentRun, DetailPageTaskBatch, DetailPageCanvasConfig, DetailPageExportResult } from '../../types';
 import { ProductDnaCard } from './ProductDnaCard';
 import { PlanConfirmation } from './PlanConfirmation';
 import { RenderingQueue } from './RenderingQueue';
 import { DetailPageCanvasExport } from './DetailPageCanvasExport';
-import { X, Plus, Folder, Sparkles, Upload, FileImage, ArrowRight, CheckCircle2, LayoutGrid } from 'lucide-react';
+import { X, Plus, Folder, Sparkles, Upload, FileImage, ArrowRight, CheckCircle2, LayoutGrid, Loader2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
@@ -35,17 +36,22 @@ interface ProjectDnaModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSelectProjectAndDna?: (project: CreativeProject, dna: ProductVisualDNA, assets?: ProjectAsset[]) => void;
+  initialProject?: CreativeProject | null;
+  initialDna?: ProductVisualDNA | null;
 }
 
 export const ProjectDnaModal: React.FC<ProjectDnaModalProps> = ({
   isOpen,
   onClose,
-  onSelectProjectAndDna
+  onSelectProjectAndDna,
+  initialProject = null,
+  initialDna = null
 }) => {
+  const navigate = useNavigate();
   const [projects, setProjects] = useState<CreativeProject[]>([]);
-  const [activeProject, setActiveProject] = useState<CreativeProject | null>(null);
+  const [activeProject, setActiveProject] = useState<CreativeProject | null>(initialProject || null);
   const [assets, setAssets] = useState<ProjectAsset[]>([]);
-  const [productDna, setProductDna] = useState<ProductVisualDNA | null>(null);
+  const [productDna, setProductDna] = useState<ProductVisualDNA | null>(initialDna || null);
   const [agentRun, setAgentRun] = useState<AgentRun | null>(null);
   const [generatingPlan, setGeneratingPlan] = useState(false);
   const [taskBatch, setTaskBatch] = useState<DetailPageTaskBatch | null>(null);
@@ -62,9 +68,11 @@ export const ProjectDnaModal: React.FC<ProjectDnaModalProps> = ({
   // Fetch projects on load
   useEffect(() => {
     if (isOpen) {
+      if (initialProject) setActiveProject(initialProject);
+      if (initialDna) setProductDna(initialDna);
       fetchProjects();
     }
-  }, [isOpen]);
+  }, [isOpen, initialProject, initialDna]);
 
   const fetchProjects = async () => {
     try {
@@ -74,10 +82,15 @@ export const ProjectDnaModal: React.FC<ProjectDnaModalProps> = ({
         headers: { ...authHeaders }
       });
       const data = await res.json();
-      if (data.success) {
-        setProjects(data.projects || []);
-        if (data.projects?.length > 0 && !activeProject) {
-          selectProject(data.projects[0]);
+      if (data.success && Array.isArray(data.projects)) {
+        setProjects(data.projects);
+        // If an initial project was specified or activeProject is set, retain or select it
+        const targetProj = (initialProject || activeProject)
+          ? data.projects.find((p: any) => p.id === (initialProject?.id || activeProject?.id)) || data.projects[0]
+          : data.projects[0];
+        
+        if (targetProj) {
+          selectProject(targetProj);
         }
       }
     } catch (err) {
@@ -89,9 +102,6 @@ export const ProjectDnaModal: React.FC<ProjectDnaModalProps> = ({
 
   const selectProject = async (project: CreativeProject) => {
     setActiveProject(project);
-    setProductDna(null);
-    setAssets([]);
-    setUploadedBase64List([]);
 
     try {
       setLoading(true);
@@ -102,8 +112,37 @@ export const ProjectDnaModal: React.FC<ProjectDnaModalProps> = ({
       const data = await res.json();
       if (data.success) {
         setAssets(data.assets || []);
-        setProductDna(data.productDna || null);
+        if (data.productDna) {
+          setProductDna(data.productDna);
+        } else if (initialDna && (project.id === initialProject?.id || project.id === initialDna.project_id)) {
+          setProductDna(initialDna);
+        } else {
+          setProductDna(null);
+        }
+        // Restore uploadedBase64List from assets
+        const restored = (data.assets || [])
+          .map((a: any) => a.storage_path || a.url || a.storage_url || '')
+          .filter((u: string) => !!u);
+        setUploadedBase64List(restored);
       }
+
+      // Query latest agent run
+      try {
+        const runRes = await fetch(`/api/agent-runs?projectId=${project.id}`, {
+          headers: { ...authHeaders }
+        });
+        const runData = await runRes.json();
+        if (runData.success && runData.agentRuns?.length > 0) {
+          const latestRun = runData.agentRuns[0];
+          setAgentRun(latestRun);
+          if (latestRun.id) {
+            fetchTaskBatch(latestRun.id).catch(() => {});
+          }
+        } else {
+          setAgentRun(null);
+          setTaskBatch(null);
+        }
+      } catch (e) {}
     } catch (err) {
       console.error(err);
     } finally {
@@ -128,10 +167,15 @@ export const ProjectDnaModal: React.FC<ProjectDnaModalProps> = ({
         })
       });
       const data = await res.json();
-      if (data.success) {
-        setProjects(prev => [data.project, ...prev]);
+      if (data.success && data.project) {
+        setProjects(prev => [data.project, ...prev.filter(p => p.id !== data.project.id)]);
         setNewProjectName('');
-        selectProject(data.project);
+        setActiveProject(data.project);
+        setAssets([]);
+        setUploadedBase64List([]);
+        setProductDna(null);
+        setAgentRun(null);
+        setTaskBatch(null);
       }
     } catch (err) {
       console.error(err);
@@ -158,7 +202,7 @@ export const ProjectDnaModal: React.FC<ProjectDnaModalProps> = ({
           if (activeProject) {
             try {
               const authHeaders = await getAuthHeaders();
-              await fetch(`/api/projects/${activeProject.id}/assets`, {
+              const uploadRes = await fetch(`/api/projects/${activeProject.id}/assets`, {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
@@ -170,6 +214,10 @@ export const ProjectDnaModal: React.FC<ProjectDnaModalProps> = ({
                   mime_type: file.type || 'image/jpeg'
                 })
               });
+              const uData = await uploadRes.json();
+              if (uData.success && uData.asset) {
+                setAssets(prev => [...prev, uData.asset]);
+              }
             } catch (e) {
               console.error(e);
             }
@@ -183,6 +231,27 @@ export const ProjectDnaModal: React.FC<ProjectDnaModalProps> = ({
       };
       reader.readAsDataURL(file);
     });
+  };
+
+  const handleDeletePhoto = async (index: number) => {
+    const photoToDelete = uploadedBase64List[index];
+    setUploadedBase64List(prev => prev.filter((_, i) => i !== index));
+
+    if (activeProject && assets.length > 0) {
+      const matchingAsset = assets.find(a => (a.storage_path === photoToDelete || a.url === photoToDelete || a.id === photoToDelete));
+      if (matchingAsset) {
+        try {
+          const authHeaders = await getAuthHeaders();
+          await fetch(`/api/projects/${activeProject.id}/assets/${matchingAsset.id}`, {
+            method: 'DELETE',
+            headers: authHeaders
+          });
+          setAssets(prev => prev.filter(a => a.id !== matchingAsset.id));
+        } catch (e) {
+          console.error(e);
+        }
+      }
+    }
   };
 
   const handleExtractDna = async () => {
@@ -516,17 +585,31 @@ export const ProjectDnaModal: React.FC<ProjectDnaModalProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <a
-                      href={`/creative-canvas/${activeProject.id}`}
-                      className="bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 shadow"
+                    <button
+                      onClick={() => {
+                        if (onSelectProjectAndDna && productDna) {
+                          onSelectProjectAndDna(activeProject, productDna, assets);
+                        }
+                        onClose();
+                        navigate(`/creative-canvas/${activeProject.id}`);
+                      }}
+                      className="bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 shadow transition cursor-pointer"
                     >
                       <LayoutGrid className="w-3.5 h-3.5" /> 打开项目视觉画布
-                    </a>
+                    </button>
 
-                    {productDna?.confirmed_at && (
+                    {productDna && (
                       <button
-                        onClick={() => onSelectProjectAndDna && onSelectProjectAndDna(activeProject, productDna, assets)}
-                        className="bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs px-4 py-2 rounded-lg flex items-center gap-1.5 shadow"
+                        onClick={async () => {
+                          if (!productDna.confirmed_at) {
+                            await handleConfirmDna();
+                          } else if (onSelectProjectAndDna) {
+                            onSelectProjectAndDna(activeProject, productDna, assets);
+                          }
+                          onClose();
+                          navigate(`/creative-canvas/${activeProject.id}`);
+                        }}
+                        className="bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs px-4 py-2 rounded-lg flex items-center gap-1.5 shadow transition cursor-pointer"
                       >
                         进入 9 屏策划 <ArrowRight className="w-4 h-4" />
                       </button>
@@ -550,8 +633,16 @@ export const ProjectDnaModal: React.FC<ProjectDnaModalProps> = ({
                   {uploadedBase64List.length > 0 && (
                     <div className="flex flex-wrap gap-2 pt-2">
                       {uploadedBase64List.map((img, idx) => (
-                        <div key={idx} className="w-16 h-16 rounded-lg overflow-hidden border border-stone-200 relative group bg-white">
-                          <img src={img} alt="Product" className="w-full h-full object-cover" />
+                        <div key={idx} className="w-16 h-16 rounded-lg overflow-hidden border border-stone-200 relative group bg-white shadow-xs">
+                          <img src={img} alt={`Product ${idx + 1}`} className="w-full h-full object-cover" />
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePhoto(idx)}
+                            className="absolute top-1 right-1 bg-stone-900/80 hover:bg-red-600 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition shadow cursor-pointer"
+                            title="移除照片"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
                         </div>
                       ))}
                     </div>

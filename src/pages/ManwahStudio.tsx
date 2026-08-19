@@ -388,7 +388,7 @@ const App: React.FC = () => {
           setUserProfile({
             nickname: data?.nickname || data?.username || defaultEmpId,
             username: data?.username || defaultEmpId,
-            role: data?.role || 'admin',
+            role: data?.role || 'user',
             ...data
           });
         }
@@ -629,8 +629,14 @@ const App: React.FC = () => {
   const handleSetAsReference = (imageUrl: string) => {
     // Extract MIME type and base64 data safely
     const mimeMatch = imageUrl.match(/data:(.*?);base64/);
-    const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
     const base64Data = imageUrl.includes(',') ? imageUrl.split(',')[1] : imageUrl;
+    let mimeType = mimeMatch ? mimeMatch[1] : undefined;
+    if (!mimeType && base64Data) {
+      if (base64Data.startsWith('/9j/')) mimeType = 'image/jpeg';
+      else if (base64Data.startsWith('UklGR')) mimeType = 'image/webp';
+      else if (base64Data.startsWith('iVBORw0K')) mimeType = 'image/png';
+    }
+    if (!mimeType) mimeType = 'image/png';
 
     // Create new ImageAttachment from the generated image URL (base64)
     const newImageId = crypto.randomUUID();
@@ -2005,7 +2011,7 @@ You MUST adjust the proportions. The side view width MUST be exactly ${Math.roun
                  <div className="mt-6 space-y-6">
                    <div className="space-y-3">
                      <p className="text-xs font-bold text-stone-500">算力与画质档位</p>
-                     <div className="grid grid-cols-4 gap-2">
+                     <div className="grid grid-cols-5 gap-2">
                        <button 
                          onClick={() => setModel('gemini-2.5-flash')}
                          className={`p-2 rounded-xl text-center border transition-all ${model === 'gemini-2.5-flash' ? 'bg-brand-charcoal text-white border-brand-charcoal shadow-lg' : 'bg-white border-stone-200 hover:border-brand-taupe'}`}
@@ -2037,6 +2043,15 @@ You MUST adjust the proportions. The side view width MUST be exactly ${Math.roun
                          <div className="text-lg mb-1 opacity-80">🌌</div>
                          <div className="text-[10px] font-bold">GPT</div>
                          <div className="text-[8px] opacity-70">image-2</div>
+                       </button>
+                       <button
+                         onClick={() => setModel('openai/gpt-image-2-all')}
+                         className={`p-2 rounded-xl text-center border transition-all ${model === 'openai/gpt-image-2-all' ? 'bg-brand-charcoal text-white border-brand-charcoal shadow-lg' : 'bg-white border-stone-200 hover:border-brand-taupe'}`}
+                         title="仅支持已保存为公网 HTTPS URL 的多参考图"
+                       >
+                         <div className="text-lg mb-1 opacity-80">🧩</div>
+                         <div className="text-[10px] font-bold">GPT 多图</div>
+                         <div className="text-[8px] opacity-70">image-2-all</div>
                        </button>
                      </div>
                    </div>
@@ -2199,6 +2214,8 @@ You MUST adjust the proportions. The side view width MUST be exactly ${Math.roun
       <ProjectDnaModal
         isOpen={showProjectDnaModal}
         onClose={() => setShowProjectDnaModal(false)}
+        initialProject={currentProjectDnaInfo?.project || null}
+        initialDna={currentProjectDnaInfo?.dna || null}
         onSelectProjectAndDna={async (project, dna, assets) => {
           setCurrentProjectDnaInfo({ project, dna });
           setShowProjectDnaModal(false);
@@ -2216,10 +2233,23 @@ You MUST adjust the proportions. The side view width MUST be exactly ${Math.roun
           }
 
           if (loadedAssets && loadedAssets.length > 0) {
+            const resolveAssetUrl = (asset: any): string => {
+              if (!asset) return '';
+              if (asset.url) return asset.url;
+              if (asset.storage_url) return asset.storage_url;
+              if (asset.dataUrl) return asset.dataUrl;
+              const path = asset.storage_path || asset.objectKey || '';
+              if (!path) return '';
+              if (path.startsWith('data:') || path.startsWith('http://') || path.startsWith('https://') || path.startsWith('/')) {
+                return path;
+              }
+              return `/api/canvases/assets/${path}`;
+            };
+
             const updatedChannels: ProcessingChannel[] = INITIAL_CHANNELS.map((ch, idx) => {
               const asset = loadedAssets![idx];
               if (asset) {
-                const imgUrl = asset.url || asset.storage_url || (asset.objectKey ? `/api/canvases/assets/${asset.objectKey}` : (asset.storage_path ? `/api/canvases/assets/${asset.storage_path}` : ''));
+                const imgUrl = resolveAssetUrl(asset);
                 if (imgUrl) {
                   const imgAttachment: ImageAttachment = {
                     id: asset.id || `asset_${idx}`,

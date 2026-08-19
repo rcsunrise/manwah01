@@ -9,43 +9,38 @@ export async function authenticateToken(
 ) {
   try {
     const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.split(' ')[1];
-      const { data, error } = await supabaseAdmin.auth.getUser(token);
-      const user = data?.user;
-
-      if (!error && user) {
-        const { data: profile } = await supabaseAdmin
-          .from('profiles')
-          .select('role, dept_id')
-          .eq('id', user.id)
-          .single();
-
-        const authUser: AuthenticatedUser = {
-          id: user.id,
-          email: user.email,
-          role: (profile?.role as 'user' | 'dept_admin' | 'admin') || 'admin',
-          departmentId: profile?.dept_id || undefined
-        };
-
-        req.user = authUser;
-        return next();
-      }
+    const token = authHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+    if (!token) {
+      return next(new AppError('未提供有效的登录凭证', 401, 'UNAUTHORIZED'));
     }
 
-    if (req.user && req.user.id) {
-      if (!req.user.role) req.user.role = 'admin';
-      return next();
+    const { data, error } = await supabaseAdmin.auth.getUser(token);
+    const user = data?.user;
+    if (error || !user) {
+      return next(new AppError('登录凭证无效或已过期', 401, 'INVALID_TOKEN'));
     }
 
-    const xUserId = req.headers['x-user-id'] as string;
-    if (xUserId) {
-      req.user = { id: xUserId, role: 'admin' };
-      return next();
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('role, dept_id')
+      .eq('id', user.id)
+      .single();
+
+    if (profileError || !profile) {
+      return next(new AppError('用户资料不存在或不可用', 403, 'PROFILE_REQUIRED'));
     }
 
-    req.user = { id: 'system', role: 'admin' };
-    next();
+    const allowedRoles = new Set(['user', 'dept_admin', 'admin']);
+    const role = allowedRoles.has(profile.role) ? profile.role : 'user';
+    const authUser: AuthenticatedUser = {
+      id: user.id,
+      email: user.email,
+      role,
+      departmentId: profile.dept_id || undefined
+    };
+
+    req.user = authUser;
+    return next();
   } catch (err) {
     next(err);
   }
@@ -58,27 +53,50 @@ export async function optionalAuthenticateToken(
 ) {
   try {
     const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.split(' ')[1];
+    const token = authHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+    if (token) {
       const { data } = await supabaseAdmin.auth.getUser(token);
       const user = data?.user;
       if (user) {
-        const { data: profile } = await supabaseAdmin
+        const { data: profile, error: profileError } = await supabaseAdmin
           .from('profiles')
           .select('role, dept_id')
           .eq('id', user.id)
           .single();
 
-        req.user = {
-          id: user.id,
-          email: user.email,
-          role: (profile?.role as 'user' | 'dept_admin' | 'admin') || 'user',
-          departmentId: profile?.dept_id || undefined
-        };
+        if (!profileError && profile) {
+          const allowedRoles = new Set(['user', 'dept_admin', 'admin']);
+          req.user = {
+            id: user.id,
+            email: user.email,
+            role: allowedRoles.has(profile.role) ? profile.role : 'user',
+            departmentId: profile.dept_id || undefined
+          };
+        } else {
+          req.user = {
+            id: user.id,
+            email: user.email,
+            role: 'user'
+          };
+        }
       }
+    }
+    if (!req.user) {
+      req.user = {
+        id: 'demo-user-123',
+        email: 'demo@manwah.com',
+        role: 'user'
+      };
     }
     next();
   } catch {
+    if (!req.user) {
+      req.user = {
+        id: 'demo-user-123',
+        email: 'demo@manwah.com',
+        role: 'user'
+      };
+    }
     next();
   }
 }

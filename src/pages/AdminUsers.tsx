@@ -35,8 +35,7 @@ const DeleteUserModal = ({ user, onClose, onUpdate }: {
         method: 'DELETE',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token}`,
-          'x-user-id': session?.user?.id || ''
+          'Authorization': `Bearer ${session?.access_token}`
         }
       });
 
@@ -137,8 +136,7 @@ const ResetPasswordModal = ({ user, onClose }: {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token}`,
-          'x-user-id': session?.user?.id || ''
+          'Authorization': `Bearer ${session?.access_token}`
         },
         body: JSON.stringify({
           userId: user.id,

@@ -18,7 +18,6 @@ MANWAH AI 是专为工业家居设计与企划打造的 AI 智能创作与管理
 - **AI 供应商接入**：
   - Gemini API (`@google/genai` 官方 SDK)
   - RouterHub API (多模型路由与代理)
-  - 阿里云百炼 API (Bailian)
 - **测试框架**：Vitest
 
 ---
@@ -75,7 +74,7 @@ MANWAH AI 是专为工业家居设计与企划打造的 AI 智能创作与管理
 - 所有敏感的管理接口（如 `/api/admin/create-user`、`/api/admin/reset-password`）均在后端通过 Bearer Token 校验 Supabase 用户 JWT，并查询 `profiles` 表的 `role` 字段是否为 `admin` 或 `dept_admin`。
 
 ### 3.2 AI 服务接入与代理层
-- **服务端统一代理**：所有与第三方的通信（Gemini、RouterHub、Bailian）均在 `server.ts` 后端代理，严禁在前端暴露 API Key。
+- **服务端统一代理**：所有模型 Provider 通信均由 `server.ts` 后端网关和统一 AI Client 发起，严禁在前端暴露 Provider 凭据。
 - **高可用与回退策略**：Gemini 服务在 `server.ts` 中配置了供应商故障容错与错误捕获机制，自动解析输出 Base64 或图片 URL。
 
 ### 3.3 扣费与计费机制 (Billing Architecture)
@@ -91,14 +90,13 @@ MANWAH AI 是专为工业家居设计与企划打造的 AI 智能创作与管理
 
 | 变量名 | 类型 | 说明 |
 | :--- | :--- | :--- |
-| `GEMINI_API_KEY` | 服务端私钥 | 谷歌 Gemini API Key |
-| `ROUTERHUB_API_KEY` | 服务端私钥 | RouterHub 路由平台 API Key |
-| `BAILIAN_API_KEY` | 服务端私钥 | 阿里云百炼 API Key |
 | `SUPABASE_URL` | 公开/服务端 | Supabase 项目 URL |
 | `SUPABASE_ANON_KEY` | 浏览器公开 | Supabase Anon 客户端 Key |
 | `SUPABASE_SERVICE_ROLE_KEY` | 服务端私钥 | Supabase 管理员 Service Role Key（严禁暴露至前端） |
 | `ADMIN_USERNAME` | 脚本变量 | `scripts/create_admin.ts` 使用的初始账号 |
 | `ADMIN_PASSWORD` | 脚本变量 | `scripts/create_admin.ts` 使用的初始密码 |
+
+模型 Provider 的 Base URL 与凭据统一存放在 Supabase `department_configs` 中，由部门配置或“全站系统”配置解析；不再提供项目环境变量形式的旧 Provider Key 回退。
 
 ---
 

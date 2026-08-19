@@ -1,0 +1,110 @@
+{
+  "project": {
+    "id": "proj_manwah_sofa_default",
+    "name": "敏华真皮头等舱沙发企划",
+    "project_type": "detail_page",
+    "status": "active",
+    "owner_id": null,
+    "settings": {},
+    "created_at": "2026-08-01T08:00:00.000Z",
+    "updated_at": "2026-08-14T05:51:25.269Z"
+  },
+  "assets": [
+    {
+      "id": "asset_default_sofa_01",
+      "project_id": "proj_manwah_sofa_default",
+      "owner_id": "demo-user-123",
+      "asset_type": "product_photo",
+      "storage_path": "/material_sample_1.jpg",
+      "mime_type": "image/jpeg",
+      "metadata": {
+        "title": "敏华真皮头等舱沙发 45度主视角"
+      },
+      "created_at": "2026-08-01T08:00:00.000Z"
+    },
+    {
+      "id": "asset_default_sofa_02",
+      "project_id": "proj_manwah_sofa_default",
+      "owner_id": "demo-user-123",
+      "asset_type": "product_photo",
+      "storage_path": "/material-placeholder.jpg",
+      "mime_type": "image/jpeg",
+      "metadata": {
+        "title": "头层牛皮天然纹理与钛金脚特写"
+      },
+      "created_at": "2026-08-01T08:05:00.000Z"
+    }
+  ],
+  "productDna": {
+    "project_id": "proj_manwah_sofa_default",
+    "schema_version": 1,
+    "category": "沙发",
+    "subcategory": "头等舱电动功能真皮沙发",
+    "style": [
+      "意式极简",
+      "现代轻奢",
+      "商务头等舱"
+    ],
+    "primaryColor": "酒红色 (RGB: 128, 45, 55)",
+    "secondaryColors": [
+      "金属拉丝钛金",
+      "哑光黑底框"
+    ],
+    "materials": [
+      "头层牛皮",
+      "金属拉丝脚",
+      "高密度回弹海绵",
+      "静音合金电动骨架"
+    ],
+    "structuralFeatures": [
+      {
+        "name": "包覆式高靠背",
+        "description": "分区护颈护腰，多段承托",
+        "confidence": 0.98
+      },
+      {
+        "name": "110°-160°电动无级调节",
+        "description": "高品质静音电动电机支撑展开脚托",
+        "confidence": 0.99
+      },
+      {
+        "name": "双缝线真皮扶手",
+        "description": "意式双车缝线与压边工艺",
+        "confidence": 0.96
+      }
+    ],
+    "functionalFeatures": [
+      "电动脚托展开",
+      "隐形USB快充接口",
+      "零重力舒压模式",
+      "多角度护颈调节"
+    ],
+    "lockedFeatures": [
+      {
+        "name": "材质与皮革质感",
+        "rule": "必须保持酒红色头层牛皮天然纹理与奢华光泽，严禁变更为布艺或低质仿皮",
+        "priority": "critical"
+      },
+      {
+        "name": "金属拉丝脚造型",
+        "rule": "保留金属拉丝电镀脚造型与底部阴影间隙，禁止变形或缺失",
+        "priority": "critical"
+      },
+      {
+        "name": "结构比例锁定",
+        "rule": "严禁拉伸变形或改变沙发靠背与扶手黄金比例",
+        "priority": "high"
+      }
+    ],
+    "logo": {
+      "visible": true,
+      "position": "扶手侧面金属铭牌",
+      "description": "MANWAH 敏华金属压印铭牌"
+    },
+    "user_corrections": {},
+    "version": 1,
+    "confirmed_at": "2026-08-01T08:30:00.000Z",
+    "created_at": "2026-08-01T08:00:00.000Z",
+    "updated_at": "2026-08-14T05:51:25.269Z"
+  }
+}

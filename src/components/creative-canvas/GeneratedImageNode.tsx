@@ -27,6 +27,9 @@ export const GeneratedImageNode: React.FC<GeneratedImageNodeProps> = ({ data, se
     screenTitle,
     imageUrl,
     dimensions = '1024x1365',
+    sourceWidth,
+    sourceHeight,
+    sourceAspectRatio,
     aspectRatio = '3:4',
     model = 'google/gemini-3-pro-image-preview',
     generatedAt,
@@ -63,6 +66,23 @@ export const GeneratedImageNode: React.FC<GeneratedImageNodeProps> = ({ data, se
         );
     }
   };
+
+  const getCssAspectRatio = (ratioStr?: string): string => {
+    if (!ratioStr || ratioStr === 'Auto' || ratioStr === 'Custom') return '3/4';
+    const parts = ratioStr.split(':');
+    if (parts.length === 2) {
+      const w = parseFloat(parts[0]);
+      const h = parseFloat(parts[1]);
+      if (!isNaN(w) && !isNaN(h) && h > 0) {
+        return `${w}/${h}`;
+      }
+    }
+    return '3/4';
+  };
+
+  const sourceRatioCss = (sourceWidth && sourceHeight && sourceWidth > 0 && sourceHeight > 0)
+    ? `${sourceWidth}/${sourceHeight}`
+    : getCssAspectRatio(sourceAspectRatio || aspectRatio);
 
   const displayVersionCode = assetVersionCode || `V00${version}`;
 
@@ -102,13 +122,17 @@ export const GeneratedImageNode: React.FC<GeneratedImageNodeProps> = ({ data, se
         {getReviewBadge()}
       </div>
 
-      {/* Image Preview Container */}
-      <div className="relative w-full aspect-[3/4] bg-stone-100 overflow-hidden group">
+      {/* Image Preview Container with Dynamic Ratio and object-contain */}
+      <div
+        className="relative w-full bg-stone-100 overflow-hidden group min-h-[160px] flex items-center justify-center"
+        style={{ aspectRatio: sourceRatioCss }}
+      >
         {!imgError && imageUrl ? (
           <img
             src={imageUrl}
             alt={`分镜 #${sceneIndex} ${screenTitle}`}
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+            className="w-full h-full object-contain transition-transform duration-300"
+            draggable={false}
             referrerPolicy="no-referrer"
             onError={() => setImgError(true)}
           />
@@ -135,10 +159,10 @@ export const GeneratedImageNode: React.FC<GeneratedImageNodeProps> = ({ data, se
           </button>
         </div>
 
-        {/* Resolution tag */}
+        {/* Resolution & Aspect ratio tag */}
         <div className="absolute bottom-2 left-2 bg-black/60 backdrop-blur-md text-white text-[9px] px-2 py-0.5 rounded-full font-mono flex items-center gap-1">
           <ShieldCheck className="w-2.5 h-2.5 text-emerald-400" />
-          <span>cloud_saved · {aspectRatio}</span>
+          <span>cloud_saved · {sourceAspectRatio || aspectRatio}</span>
         </div>
       </div>
 

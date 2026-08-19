@@ -9,12 +9,15 @@ import { SaveVersionModal } from '../../components/creative-canvas/SaveVersionMo
 import { VersionHistoryModal } from '../../components/creative-canvas/VersionHistoryModal';
 import { NewCanvasModal } from '../../components/creative-canvas/NewCanvasModal';
 import { AssetVersionModal } from '../../components/creative-canvas/AssetVersionModal';
+import { GptImagePreviewModal } from '../../components/creative-canvas/GptImagePreviewModal';
+import { LongImageLayoutEditor } from '../../components/creative-canvas/LongImageLayoutEditor';
 import { useCreativeCanvasWorkspace } from '../../hooks/useCreativeCanvasWorkspace';
 
 export default function CreativeCanvasPage() {
   const { workspaceId } = useParams<{ workspaceId?: string }>();
   const navigate = useNavigate();
   const [showNewCanvasModal, setShowNewCanvasModal] = React.useState(false);
+  const [showLayoutEditor, setShowLayoutEditor] = React.useState(false);
   const [showAssetModal, setShowAssetModal] = React.useState(false);
   const [assetModalTarget, setAssetModalTarget] = React.useState<{
     nodeId: string;
@@ -48,8 +51,14 @@ export default function CreativeCanvasPage() {
     handleReplanSingleScene,
     handleNodeClick,
     generatingScenes,
+    uploadedBase64,
+    setUploadedBase64,
     selectedModel,
     setSelectedModel,
+    planAgentModel,
+    setPlanAgentModel,
+    planReasoningEffort,
+    setPlanReasoningEffort,
     selectedResolution,
     setSelectedResolution,
     handleGenerateSceneImage,
@@ -95,8 +104,103 @@ export default function CreativeCanvasPage() {
     productDnaVersionId,
     dnaVersions,
     onSelectDnaVersion,
-    onSelectSceneIndex
+    onSelectSceneIndex,
+
+    // G0-1 Agent Conversation Hooks
+    currentConversation,
+    conversationsList,
+    isStreaming,
+    streamError,
+    handleSendMessageStream,
+    handleStopGenerating,
+    handleRetryMessage,
+    handleCreateNewConversation,
+    handleSelectConversation
   } = useCreativeCanvasWorkspace(workspaceId);
+
+  // GPT Image 2 Preview Modal state & handlers
+  const [showGptPreviewModal, setShowGptPreviewModal] = React.useState(false);
+  const [gptPreviewParams, setGptPreviewParams] = React.useState<{
+    screenIndex: number;
+    reviewFeedback?: string;
+    overrideModel?: string;
+    overrideResolution?: '1K' | '2K' | '4K';
+    screenTitle?: string;
+    promptSuggestion?: string;
+  }>({
+    screenIndex: 1
+  });
+
+  const effectiveUploadedImageUrl = React.useMemo(() => {
+    if (uploadedBase64) return uploadedBase64;
+    const imgNode = nodes.find(
+      n => n.id === 'img-node-1' || n.type === 'productImageNode' || n.type === 'productImage'
+    );
+    return (imgNode?.data?.imageUrl as string) || null;
+  }, [uploadedBase64, nodes]);
+
+  const handleTriggerGenerateSceneImage = React.useCallback(
+    (
+      screenIndex: number,
+      reviewFeedback?: string,
+      overrideModel?: string,
+      overrideResolution?: '1K' | '2K' | '4K'
+    ) => {
+      const modelToUse = overrideModel || selectedModel || 'gemini-3.1-flash-image';
+      if (modelToUse.includes('gpt-image')) {
+        const screen = agentRun?.plan?.screens?.find(s => s.screenIndex === screenIndex);
+        const sceneNode = nodes.find(
+          n => n.id === `scene-plan-node-${screenIndex}` || n.data?.screenIndex === screenIndex
+        );
+        setGptPreviewParams({
+          screenIndex,
+          reviewFeedback,
+          overrideModel,
+          overrideResolution,
+          screenTitle: screen?.screenTitle || (sceneNode?.data?.screenTitle as string) || `第 ${screenIndex} 屏`,
+          promptSuggestion:
+            screen?.promptSuggestion ||
+            (sceneNode?.data?.promptSuggestion as string) ||
+            (sceneNode?.data?.prompt as string) ||
+            ''
+        });
+        setShowGptPreviewModal(true);
+      } else {
+        handleGenerateSceneImage(screenIndex, reviewFeedback, overrideModel, overrideResolution);
+      }
+    },
+    [selectedModel, agentRun, nodes, handleGenerateSceneImage]
+  );
+
+  const handleOpenGptPreviewManual = React.useCallback(() => {
+    const idx = selectedSceneIndex || 1;
+    const screen = agentRun?.plan?.screens?.find(s => s.screenIndex === idx);
+    const sceneNode = nodes.find(
+      n => n.id === `scene-plan-node-${idx}` || n.data?.screenIndex === idx
+    );
+    setGptPreviewParams({
+      screenIndex: idx,
+      screenTitle: screen?.screenTitle || (sceneNode?.data?.screenTitle as string) || `第 ${idx} 屏`,
+      promptSuggestion:
+        screen?.promptSuggestion ||
+        (sceneNode?.data?.promptSuggestion as string) ||
+        (sceneNode?.data?.prompt as string) ||
+        ''
+    });
+    setShowGptPreviewModal(true);
+  }, [selectedSceneIndex, agentRun, nodes]);
+
+  const handleConfirmGptPreview = React.useCallback(() => {
+    setShowGptPreviewModal(false);
+    if (gptPreviewParams.screenIndex) {
+      handleGenerateSceneImage(
+        gptPreviewParams.screenIndex,
+        gptPreviewParams.reviewFeedback,
+        gptPreviewParams.overrideModel,
+        gptPreviewParams.overrideResolution
+      );
+    }
+  }, [gptPreviewParams, handleGenerateSceneImage]);
 
   const handleCreateNewCanvas = () => {
     setShowNewCanvasModal(true);
@@ -133,6 +237,39 @@ export default function CreativeCanvasPage() {
     });
   }, [nodes]);
 
+  const productionImagesMap = React.useMemo(() => {
+    const map: Record<string, {
+      imageUrl: string;
+      width: number;
+      height: number;
+      aspectRatio?: string;
+      assetVersionId?: string;
+      subjectBounds?: any;
+    }> = {};
+
+    nodes.forEach(node => {
+      if (node.type === 'generatedImage' || node.type === 'generatedImageNode' || node.id.startsWith('gen-img-node-')) {
+        const d = node.data as any;
+        if (d) {
+          const sIdx = Number(d.sceneIndex) || 1;
+          const sceneKey = `scene-${String(sIdx).padStart(2, '0')}`;
+          const dims = typeof d.dimensions === 'string' ? d.dimensions.split('x') : [];
+          const w = d.sourceWidth || (dims.length === 2 ? parseInt(dims[0], 10) : 1920);
+          const h = d.sourceHeight || (dims.length === 2 ? parseInt(dims[1], 10) : 1080);
+          map[sceneKey] = {
+            imageUrl: d.imageUrl || '',
+            width: w,
+            height: h,
+            aspectRatio: d.sourceAspectRatio || d.aspectRatio,
+            assetVersionId: d.assetVersionId,
+            subjectBounds: d.subjectBounds || null
+          };
+        }
+      }
+    });
+    return map;
+  }, [nodes]);
+
   return (
     <div className="w-screen h-screen h-[100dvh] flex flex-col bg-[#FAF8F5] overflow-hidden fixed inset-0 z-50">
       <WorkflowHeader
@@ -146,6 +283,7 @@ export default function CreativeCanvasPage() {
         onViewDnaVersion={() => setShowFullDnaDrawer(true)}
         onOpenSaveModal={() => setShowSaveVersionModal(true)}
         onOpenHistoryModal={() => setShowHistoryModal(true)}
+        onOpenLayoutEditor={() => setShowLayoutEditor(true)}
         onNewCanvas={handleCreateNewCanvas}
       />
       <div className="flex-1 flex w-full h-[calc(100dvh-3.5rem)] overflow-hidden relative">
@@ -179,7 +317,15 @@ export default function CreativeCanvasPage() {
             showFullDnaDrawer={showFullDnaDrawer}
             setShowFullDnaDrawer={setShowFullDnaDrawer}
             onUploadFile={handleUploadFile}
-            onSendMessage={addUserMessage}
+            onSendMessage={handleSendMessageStream}
+            currentConversation={currentConversation}
+            conversationsList={conversationsList}
+            isStreaming={isStreaming}
+            streamError={streamError}
+            onStopGenerating={handleStopGenerating}
+            onRetryMessage={handleRetryMessage}
+            onCreateNewConversation={handleCreateNewConversation}
+            onSelectConversation={handleSelectConversation}
             agentRun={agentRun}
             isPlanGenerating={isPlanGenerating}
             planError={planError}
@@ -188,13 +334,18 @@ export default function CreativeCanvasPage() {
             onSelectSceneIndex={onSelectSceneIndex}
             onGenerateNineGridPlan={handleGenerateNineGridPlan}
             onReplanSingleScene={handleReplanSingleScene}
+            planAgentModel={planAgentModel}
+            setPlanAgentModel={setPlanAgentModel}
+            planReasoningEffort={planReasoningEffort}
+            setPlanReasoningEffort={setPlanReasoningEffort}
             generatingScenes={generatingScenes}
             nodes={nodes}
             selectedModel={selectedModel}
             setSelectedModel={setSelectedModel}
             selectedResolution={selectedResolution}
             setSelectedResolution={setSelectedResolution}
-            onGenerateSceneImage={handleGenerateSceneImage}
+            onGenerateSceneImage={handleTriggerGenerateSceneImage}
+            onPreviewGptImage={handleOpenGptPreviewManual}
             onApproveSceneImage={handleApproveSceneImage}
             onRejectSceneImage={handleRejectSceneImage}
 
@@ -275,6 +426,30 @@ export default function CreativeCanvasPage() {
             }
           }}
         />
+
+        {/* GPT-Image-2 Uploaded Reference Preview & Confirmation Modal */}
+        <GptImagePreviewModal
+          isOpen={showGptPreviewModal}
+          onClose={() => setShowGptPreviewModal(false)}
+          onConfirm={handleConfirmGptPreview}
+          uploadedImageUrl={effectiveUploadedImageUrl}
+          onUploadNewImage={(b64) => setUploadedBase64(b64)}
+          screenIndex={gptPreviewParams.screenIndex}
+          screenTitle={gptPreviewParams.screenTitle}
+          promptSuggestion={gptPreviewParams.promptSuggestion}
+          selectedModel={selectedModel}
+          selectedResolution={selectedResolution}
+        />
+
+        {/* C4B-4-R2 Nine-Screen Mixed Aspect Ratio Long Image Layout Editor */}
+        {showLayoutEditor && (
+          <LongImageLayoutEditor
+            canvasId={canvasId || workspaceId || 'default-canvas'}
+            projectId={workspaceId || 'proj_c4b4_default'}
+            productionImages={productionImagesMap}
+            onClose={() => setShowLayoutEditor(false)}
+          />
+        )}
       </div>
     </div>
   );

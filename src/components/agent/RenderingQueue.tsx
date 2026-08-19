@@ -10,6 +10,19 @@ interface RenderingQueueProps {
   isExecutingAll?: boolean;
 }
 
+const getCssAspectRatio = (ratioStr?: string): string => {
+  if (!ratioStr || ratioStr === 'Auto' || ratioStr === 'Custom') return '3/4';
+  const parts = String(ratioStr).split(':');
+  if (parts.length === 2) {
+    const w = parseFloat(parts[0]);
+    const h = parseFloat(parts[1]);
+    if (!isNaN(w) && !isNaN(h) && h > 0) {
+      return `${w}/${h}`;
+    }
+  }
+  return '3/4';
+};
+
 export const RenderingQueue: React.FC<RenderingQueueProps> = ({
   batch,
   onExecuteTask,
@@ -142,13 +155,16 @@ export const RenderingQueue: React.FC<RenderingQueueProps> = ({
                 <p className="text-stone-500 text-[11px] line-clamp-1 mb-2">{task.coreSellingPoint}</p>
 
                 {/* Rendered Result Thumbnail or Placeholder */}
-                <div className="relative aspect-[3/4] bg-stone-900 rounded-lg overflow-hidden border border-stone-800 group flex items-center justify-center">
+                <div
+                  className="relative bg-stone-900 rounded-lg overflow-hidden border border-stone-800 group flex items-center justify-center min-h-[140px]"
+                  style={{ aspectRatio: getCssAspectRatio(task.aspectRatio) }}
+                >
                   {task.resultImageUrl ? (
                     <>
                       <img
                         src={task.resultImageUrl}
                         alt={task.screenTitle}
-                        className="w-full h-full object-cover transition duration-300 group-hover:scale-105"
+                        className="w-full h-full object-contain transition duration-300 group-hover:scale-105"
                       />
                       <button
                         onClick={() => setSelectedImage(task)}

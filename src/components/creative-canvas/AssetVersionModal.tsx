@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Layers, CheckCircle2, Clock, Eye, ArrowRight, ShieldCheck, Plus, Sparkles, RefreshCw } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
+import { parseJsonResponse } from '../../utils/apiUtils';
 
 interface AssetVersion {
   id: string;
@@ -36,6 +38,17 @@ interface AssetVersionModalProps {
   onVersionSwitched?: (skuId: string, versionId: string, previewUrl: string, versionCode: string) => void;
 }
 
+async function getAuthenticatedHeaders(): Promise<Record<string, string>> {
+  const session = (await supabase.auth.getSession()).data.session;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+  if (session?.access_token) {
+    headers['Authorization'] = `Bearer ${session.access_token}`;
+  }
+  return headers;
+}
+
 export const AssetVersionModal: React.FC<AssetVersionModalProps> = ({
   isOpen,
   onClose,
@@ -64,10 +77,7 @@ export const AssetVersionModal: React.FC<AssetVersionModalProps> = ({
     setLoading(true);
     setErrorMsg('');
     try {
-      const authHeader = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('token') || 'demo-token-123'}`
-      };
+      const authHeader = await getAuthenticatedHeaders();
 
       // 1. Get or Create SKU
       const skuRes = await fetch('/api/asset-skus/skus', {
@@ -80,7 +90,7 @@ export const AssetVersionModal: React.FC<AssetVersionModalProps> = ({
           name: `场景资产 (${sceneKey || 'scene-01'})`
         })
       });
-      const skuData = await skuRes.json();
+      const skuData = await parseJsonResponse<{ success: boolean; sku?: AssetSku; message?: string }>(skuRes);
       if (!skuData.success || !skuData.sku) {
         throw new Error(skuData.message || '获取/创建 Asset SKU 失败');
       }
@@ -92,7 +102,7 @@ export const AssetVersionModal: React.FC<AssetVersionModalProps> = ({
       const verRes = await fetch(`/api/asset-skus/skus/${fetchedSku.id}/versions`, {
         headers: authHeader
       });
-      const verData = await verRes.json();
+      const verData = await parseJsonResponse<{ versions?: AssetVersion[] }>(verRes);
       let verList: AssetVersion[] = verData.versions || [];
 
       // 3. If no versions exist yet, auto-create V001 with current image
@@ -107,7 +117,7 @@ export const AssetVersionModal: React.FC<AssetVersionModalProps> = ({
             checksum: `chk_v1_${Date.now().toString(36)}`
           })
         });
-        const v1Data = await createV1Res.json();
+        const v1Data = await parseJsonResponse<{ success: boolean; version?: AssetVersion }>(createV1Res);
         if (v1Data.success && v1Data.version) {
           verList = [v1Data.version];
           fetchedSku.current_version_id = v1Data.version.id;
@@ -130,20 +140,18 @@ export const AssetVersionModal: React.FC<AssetVersionModalProps> = ({
   const handleSelectVersion = async (targetVersion: AssetVersion) => {
     if (!sku) return;
     try {
-      const authHeader = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('token') || 'demo-token-123'}`
-      };
+      const authHeader = await getAuthenticatedHeaders();
 
       // 1. Select SKU version
-      await fetch(`/api/asset-skus/skus/${sku.id}/select-version`, {
+      const selectRes = await fetch(`/api/asset-skus/skus/${sku.id}/select-version`, {
         method: 'POST',
         headers: authHeader,
         body: JSON.stringify({ versionId: targetVersion.id })
       });
+      await parseJsonResponse(selectRes);
 
       // 2. Update Canvas Node Asset Reference
-      await fetch(`/api/canvases/${canvasId}/nodes/${nodeId}/asset-reference`, {
+      const refRes = await fetch(`/api/canvases/${canvasId}/nodes/${nodeId}/asset-reference`, {
         method: 'POST',
         headers: authHeader,
         body: JSON.stringify({
@@ -152,6 +160,7 @@ export const AssetVersionModal: React.FC<AssetVersionModalProps> = ({
           sceneKey
         })
       });
+      await parseJsonResponse(refRes);
 
       setActiveVersionId(targetVersion.id);
       if (onVersionSwitched) {
@@ -176,10 +185,7 @@ export const AssetVersionModal: React.FC<AssetVersionModalProps> = ({
     setErrorMsg('');
 
     try {
-      const authHeader = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('token') || 'demo-token-123'}`
-      };
+      const authHeader = await getAuthenticatedHeaders();
 
       // Secondary distinct image data for V002
       const canvasV2Sample = document.createElement('canvas');
@@ -207,7 +213,7 @@ export const AssetVersionModal: React.FC<AssetVersionModalProps> = ({
         })
       });
 
-      const v2Data = await createV2Res.json();
+      const v2Data = await parseJsonResponse<{ success: boolean; version?: AssetVersion; message?: string }>(createV2Res);
       if (!v2Data.success || !v2Data.version) {
         throw new Error(v2Data.message || '创建衍生版本 V002 失败');
       }

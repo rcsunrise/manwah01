@@ -1,0 +1,135 @@
+{
+  "project": {
+    "id": "proj_c4a3_audit_888",
+    "name": "企划项目",
+    "project_type": "detail_page",
+    "status": "active",
+    "created_at": "2026-08-14T05:52:24.794Z",
+    "updated_at": "2026-08-14T05:52:24.794Z"
+  },
+  "assets": [
+    {
+      "id": "sku_asset_projects___proj_c4a3_audit_888___assets___SKU_SCENELIVINGROOM01_MSBTG02J___V001___67548b503e2b8d91_jpg_json",
+      "project_id": "proj_c4a3_audit_888",
+      "asset_type": "product_photo",
+      "storage_path": "data:image/jpeg;base64,YXNzZXRfdmVyc2lvbl9pbWFnZV9TS1UtU0NFTkVMSVZJTkdST09NMDEtTVNCVEcwMkpfVjAwMQ==",
+      "mime_type": "image/jpeg",
+      "metadata": {
+        "source": "sku_asset"
+      },
+      "created_at": "2026-08-14T06:07:41.729Z"
+    },
+    {
+      "id": "sku_asset_projects___proj_c4a3_audit_888___assets___SKU_SCENELIVINGROOM01_MSBTG2RK___V001___242bbb767a904687_jpg_json",
+      "project_id": "proj_c4a3_audit_888",
+      "asset_type": "product_photo",
+      "storage_path": "data:image/jpeg;base64,YXNzZXRfdmVyc2lvbl9pbWFnZV9TS1UtU0NFTkVMSVZJTkdST09NMDEtTVNCVEcyUktfVjAwMQ==",
+      "mime_type": "image/jpeg",
+      "metadata": {
+        "source": "sku_asset"
+      },
+      "created_at": "2026-08-14T06:07:41.729Z"
+    },
+    {
+      "id": "sku_asset_projects___proj_c4a3_audit_888___assets___SKU_SCENELIVINGROOM01_MSBTGLHI___V001___70a24b2d97135334_jpg_json",
+      "project_id": "proj_c4a3_audit_888",
+      "asset_type": "product_photo",
+      "storage_path": "data:image/jpeg;base64,YXNzZXRfdmVyc2lvbl9pbWFnZV9TS1UtU0NFTkVMSVZJTkdST09NMDEtTVNCVEdMSElfVjAwMQ==",
+      "mime_type": "image/jpeg",
+      "metadata": {
+        "source": "sku_asset"
+      },
+      "created_at": "2026-08-14T06:07:41.729Z"
+    },
+    {
+      "id": "sku_asset_projects___proj_c4a3_audit_888___assets___SKU_SCENELIVINGROOM01_MSD7FWYJ___V001___dcf1e887520e6dfb_jpg_json",
+      "project_id": "proj_c4a3_audit_888",
+      "asset_type": "product_photo",
+      "storage_path": "data:image/jpeg;base64,YXNzZXRfdmVyc2lvbl9pbWFnZV9TS1UtU0NFTkVMSVZJTkdST09NMDEtTVNEN0ZXWUpfVjAwMQ==",
+      "mime_type": "image/jpeg",
+      "metadata": {
+        "source": "sku_asset"
+      },
+      "created_at": "2026-08-14T06:07:41.729Z"
+    },
+    {
+      "id": "sku_asset_projects___proj_c4a3_audit_888___assets___SKU_SCENELIVINGROOM01_MSDB6YP3___V001___4bad34446d97c4ef_jpg_json",
+      "project_id": "proj_c4a3_audit_888",
+      "asset_type": "product_photo",
+      "storage_path": "data:image/jpeg;base64,YXNzZXRfdmVyc2lvbl9pbWFnZV9TS1UtU0NFTkVMSVZJTkdST09NMDEtTVNEQjZZUDNfVjAwMQ==",
+      "mime_type": "image/jpeg",
+      "metadata": {
+        "source": "sku_asset"
+      },
+      "created_at": "2026-08-14T06:07:41.729Z"
+    },
+    {
+      "id": "sku_asset_projects___proj_c4a3_audit_888___assets___SKU_SCENELIVINGROOM01_MSDBHWKY___V001___90463abf21eab76d_jpg_json",
+      "project_id": "proj_c4a3_audit_888",
+      "asset_type": "product_photo",
+      "storage_path": "data:image/jpeg;base64,YXNzZXRfdmVyc2lvbl9pbWFnZV9TS1UtU0NFTkVMSVZJTkdST09NMDEtTVNEQkhXS1lfVjAwMQ==",
+      "mime_type": "image/jpeg",
+      "metadata": {
+        "source": "sku_asset"
+      },
+      "created_at": "2026-08-14T06:07:41.729Z"
+    },
+    {
+      "id": "sku_asset_projects___proj_c4a3_audit_888___assets___SKU_SCENELIVINGROOM01_MSDDXO71___V001___86fc1a070aa41200_jpg_json",
+      "project_id": "proj_c4a3_audit_888",
+      "asset_type": "product_photo",
+      "storage_path": "data:image/jpeg;base64,YXNzZXRfdmVyc2lvbl9pbWFnZV9TS1UtU0NFTkVMSVZJTkdST09NMDEtTVNERFhPNzFfVjAwMQ==",
+      "mime_type": "image/jpeg",
+      "metadata": {
+        "source": "sku_asset"
+      },
+      "created_at": "2026-08-14T06:07:41.729Z"
+    }
+  ],
+  "productDna": {
+    "project_id": "proj_c4a3_audit_888",
+    "schema_version": 1,
+    "category": "家具/客厅沙发",
+    "subcategory": "敏华C4A-3审计特供沙发 (V002升级版)",
+    "style": [
+      "意式极简",
+      "现代轻奢"
+    ],
+    "primaryColor": "#3C2A21",
+    "secondaryColors": [
+      "#C8A97E"
+    ],
+    "materials": [
+      "头层黑色牛皮",
+      "铝合金脚"
+    ],
+    "structuralFeatures": [
+      {
+        "name": "双缝线扶手",
+        "description": "双缝线扶手",
+        "confidence": 0.95
+      },
+      {
+        "name": "隐形头枕",
+        "description": "隐形头枕",
+        "confidence": 0.95
+      }
+    ],
+    "functionalFeatures": [
+      "双电控按键"
+    ],
+    "lockedFeatures": [
+      {
+        "name": "真皮质感",
+        "rule": "必须保留真皮质感",
+        "priority": "critical"
+      },
+      {
+        "name": "隐形头枕",
+        "rule": "必须保留隐形头枕",
+        "priority": "critical"
+      }
+    ],
+    "confirmed_at": "2026-08-03T15:29:41.517Z"
+  }
+}

@@ -9,10 +9,48 @@ import { supabaseAdmin} from './src/lib/supabase';
 import adminRoutes from './server/routes/adminRoutes';
 import projectRoutes from './server/routes/projectRoutes';
 import agentRoutes from './server/routes/agentRoutes';
+import agentConversationRoutes from './server/routes/agentConversationRoutes';
 import canvasRoutes from './server/routes/canvasRoutes';
 import assetRoutes from './server/routes/assetRoutes';
 import productDnaRoutes from './server/routes/productDnaRoutes';
 import copyRoutes from './server/routes/copyRoutes';
+import layoutManifestRoutes from './server/routes/layoutManifestRoutes';
+import { authenticateToken } from './server/middleware/auth';
+import {
+  getFallbackConfig,
+  getUserApiConfig,
+  isProviderKeyValid,
+  resolveApiConfig
+} from './server/ai/providerConfig';
+import {
+  assertProviderModelCompatibility,
+  resolveImageModel,
+  type ImageIntent
+} from './server/ai/modelRegistry';
+import { getImageProviderAdapter } from './server/ai/imageProviderAdapter';
+import {
+  normalizeProviderError,
+  providerErrorFromStatus,
+  ProviderError,
+  serializeProviderError
+} from './server/ai/providerError';
+import {
+  buildNormalizedImageResponse,
+  hasValidImages,
+  normalizeGeminiImageResponse
+} from './server/ai/imageResponse';
+import {
+  buildImageRoleManifest,
+  IMAGE_ROLE_LABELS,
+  normalizeImageReferences,
+  parseGenerationIntent
+} from './server/ai/imageRequest';
+import {
+  resolveAndValidateImage,
+  resolveAndValidateImages,
+  validateMask,
+  type ResolvedImageReference
+} from './server/ai/imageInputSecurity';
 
 function fileLog(msg: string) {
   try { fs.appendFileSync('debug.log', msg + '\n'); } catch (e) {}
@@ -55,26 +93,6 @@ function getPriceData(model: string) {
 }
 
 
-async function getUserApiConfig(userId: string) {
-  if (!userId || userId === 'system') return null;
-  const { data, error } = await supabaseAdmin
-    .from('profiles')
-    .select(`
-      dept_id,
-      department_configs ( api_key, api_base_url, dept_name, routing_mode, method1_key )
-    `)
-    .eq('id', userId)
-    .single();
-
-  if (error || !data?.department_configs) return null;
-  
-  const department_configs = Array.isArray(data.department_configs) 
-    ? data.department_configs[0] 
-    : data.department_configs;
-
-  return { ...data, department_configs };
-}
-
 // 基于 1 USD = 10,000 点的精细化计价函数
 function getImagePoints(model: string, resolution: string): number {
   const modelKey = model.toLowerCase();
@@ -108,26 +126,6 @@ function getImagePoints(model: string, resolution: string): number {
   }
 
   return 550; // 默认按标准 1K 兜底
-}
-
-function isValidImageResponse(fetchResult: any): boolean {
-  if (!fetchResult) return false;
-  if (fetchResult.error) return false;
-  if (fetchResult.candidates && fetchResult.candidates.length > 0) {
-    const firstCandidate = fetchResult.candidates[0];
-    const content = firstCandidate?.content;
-    if (content && content.parts && content.parts.length > 0) {
-      for (const part of content.parts) {
-        if (part.inlineData && part.inlineData.data) {
-          // If the length of base64 data is greater than 100, we consider it a successfully generated image
-          if (typeof part.inlineData.data === 'string' && part.inlineData.data.length > 100) {
-            return true;
-          }
-        }
-      }
-    }
-  }
-  return false;
 }
 
 async function chargeUser(userId: string, tokens: number, model: string, resolution: string | null, deptId: string | null, type: 'chat' | 'image_generation' = 'image_generation', inputTokens: number = 0, outputTokens: number = 0, providerMarker: string = '') {
@@ -228,176 +226,95 @@ async function chargeUser(userId: string, tokens: number, model: string, resolut
   }
 }
 
-const authenticateRequest = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const authHeader = req.headers.authorization;
-  const xUserId = req.headers['x-user-id'] as string;
-  
-  // If we have a Bearer token, use it to get the real user identity
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
-    try {
-      const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
-      if (!error && user) {
-        (req as any).user = user;
-        return next();
-      }
-    } catch (e) {
-      console.error("Auth middleware error:", e);
-    }
-  }
-
-  // Fallback to x-user-id for non-JWT requests (legacy/convenience)
-  if (xUserId) {
-    (req as any).user = { id: xUserId };
-    return next();
-  }
-
-  (req as any).user = { id: 'system' };
-  next();
-};
-
-const upload = multer({ storage: multer.memoryStorage() });
-
-async function getGlobalApiConfig() {
-  try {
-    // 之前使用 admin_notes 抛了 single_row constraint 错误。现在全局配置也存放在全站系统部门中。
-    const { data } = await supabaseAdmin.from('department_configs').select('api_base_url, api_key, routing_mode, method1_key').eq('dept_name', '全站系统').maybeSingle();
-    if (data && data.api_key) {
-      const activeProvider = (data.api_base_url || "").includes("vectorengine") ? "vectorengine" : "routerhub";
-      return {
-        apiKey: data.api_key,
-        baseUrl: data.api_base_url,
-        activeProvider,
-        routingMode: data.routing_mode,
-        method1Key: data.method1_key
-      };
-    }
-  } catch (e) {
-    console.warn("Failed to fetch global API config from department_configs", e);
-  }
-  return null;
-}
-
-async function getFallbackConfig(deptId?: string | null, method1Key?: string) {
-  const isKeyValid = (k: string | undefined) => Boolean(k && !k.includes('在这里填入') && !k.includes('placeholder') && !k.startsWith('dummy') && k.trim() !== '');
-
-  // 1. Explicit method1Key passed from department config (Hybrid Mode)
-  if (method1Key && isKeyValid(method1Key)) {
-    return { apiKey: method1Key, provider: 'routerhub', baseUrl: 'https://api.routerhub.ai/v1beta' };
-  }
-
-  // 2. process.env.ROUTERHUB_API_KEY
-  if (isKeyValid(process.env.ROUTERHUB_API_KEY)) {
-    return { apiKey: process.env.ROUTERHUB_API_KEY!, provider: 'routerhub', baseUrl: 'https://api.routerhub.ai/v1beta' };
-  }
-
-  // 3. User department's method1_key or non-vectorengine api_key
-  if (deptId) {
-    try {
-      const { data: deptConfig } = await supabaseAdmin
-        .from('department_configs')
-        .select('method1_key, api_key, api_base_url')
-        .eq('dept_id', deptId)
-        .maybeSingle();
-
-      if (deptConfig?.method1_key && isKeyValid(deptConfig.method1_key)) {
-        return { apiKey: deptConfig.method1_key, provider: 'routerhub', baseUrl: 'https://api.routerhub.ai/v1beta' };
-      }
-      if (deptConfig?.api_key && isKeyValid(deptConfig.api_key) && !(deptConfig.api_base_url || '').includes('vectorengine')) {
-        return { apiKey: deptConfig.api_key, provider: 'routerhub', baseUrl: deptConfig.api_base_url || 'https://api.routerhub.ai/v1beta' };
-      }
-    } catch (e) {
-      console.warn('Error checking dept fallback config:', e);
-    }
-  }
-
-  // 4. Global system department config
-  try {
-    const { data: globalDept } = await supabaseAdmin
-      .from('department_configs')
-      .select('method1_key, api_key, api_base_url')
-      .eq('dept_name', '全站系统')
-      .maybeSingle();
-
-    if (globalDept?.method1_key && isKeyValid(globalDept.method1_key)) {
-      return { apiKey: globalDept.method1_key, provider: 'routerhub', baseUrl: 'https://api.routerhub.ai/v1beta' };
-    }
-    if (globalDept?.api_key && isKeyValid(globalDept.api_key) && !(globalDept.api_base_url || '').includes('vectorengine')) {
-      return { apiKey: globalDept.api_key, provider: 'routerhub', baseUrl: globalDept.api_base_url || 'https://api.routerhub.ai/v1beta' };
-    }
-  } catch (e) {
-    console.warn('Error checking global fallback config:', e);
-  }
-
-  // 5. GEMINI_API_KEY or API_KEY
-  if (isKeyValid(process.env.GEMINI_API_KEY)) {
-    return { apiKey: process.env.GEMINI_API_KEY!, provider: 'google', baseUrl: 'https://generativelanguage.googleapis.com/v1beta' };
-  }
-  if (isKeyValid(process.env.API_KEY)) {
-    return { apiKey: process.env.API_KEY!, provider: 'google', baseUrl: 'https://generativelanguage.googleapis.com/v1beta' };
-  }
-
-  return null;
-}
-
-async function resolveApiConfig(userUuid: string) {
-  let apiKey = process.env.ROUTERHUB_API_KEY;
-  let baseUrl = "https://api.routerhub.ai/v1beta";
-  let deptId = null;
-  let provider = 'routerhub';
-  
-  const isKeyInvalid = (key: string | undefined) => !key || key.includes('在这里填入') || key.includes('placeholder') || key.trim() === '';
-
-  // 1. Check department config first
-  if (userUuid !== 'system') {
-    const configData = await getUserApiConfig(userUuid);
-    if (configData && configData.department_configs?.api_key && !isKeyInvalid(configData.department_configs.api_key)) {
-      deptId = configData.dept_id;
-      return {
-        apiKey: configData.department_configs.api_key,
-        baseUrl: configData.department_configs.api_base_url || baseUrl,
-        deptId,
-        provider: (configData.department_configs.api_base_url || "").includes("vectorengine") ? "vectorengine" : "routerhub",
-        routingMode: configData.department_configs.routing_mode,
-        method1Key: configData.department_configs.method1_key
-      };
-    }
-  }
-
-  // 2. Check global API Config from admin_notes ID 2
-  const globalConfig = await getGlobalApiConfig();
-  if (globalConfig && globalConfig.apiKey && !isKeyInvalid(globalConfig.apiKey)) {
-    return {
-      apiKey: globalConfig.apiKey,
-      baseUrl: globalConfig.baseUrl,
-      deptId: null,
-      provider: globalConfig.activeProvider,
-      routingMode: globalConfig.routingMode,
-      method1Key: globalConfig.method1Key
-    };
-  }
-
-  // 3. Fallback to .env Defaults
-  if (isKeyInvalid(apiKey) && !isKeyInvalid(process.env.GEMINI_API_KEY)) {
-    return {
-      apiKey: process.env.GEMINI_API_KEY,
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      deptId: null,
-      provider: 'google'
-    };
-  }
-
-  return { apiKey, baseUrl, deptId, provider };
-}
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 2, fileSize: 50 * 1024 * 1024, fields: 10 }
+});
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT || 3000);
 
   app.use(cors());
-  app.use(express.json({ limit: '500mb' }));
-  app.use(express.urlencoded({ limit: '500mb', extended: true }));
-  app.use(authenticateRequest);
+  // 100MB decoded image budget needs roughly 134MB as Base64 JSON. Keep a
+  // bounded margin while rejecting the former unbounded 500MB request shape.
+  app.use(express.json({ limit: '150mb' }));
+  app.use(express.urlencoded({ limit: '150mb', extended: true }));
+
+  app.get('/api/health', (_req, res) => {
+    res.json({ status: 'ok', service: 'manwah-ai-studio' });
+  });
+
+  app.get('/api/health/persistence', async (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const checks: Record<string, string> = {
+      creativeProjects: 'unknown',
+      creativeCanvases: 'unknown',
+      canvasRevisions: 'unknown',
+      agentConversations: 'unknown',
+      agentMessages: 'unknown'
+    };
+
+    let overallReady = true;
+
+    const isPlaceholder = (val: string | undefined) => !val || val.includes('在这里填入') || val.includes('placeholder');
+    const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+    const anonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+    const isConfigured = !isPlaceholder(url) && !isPlaceholder(anonKey);
+    const storageMedium = isConfigured ? 'supabase_db' : 'in_memory';
+
+    if (!isConfigured) {
+      overallReady = false;
+      checks.creativeProjects = 'unconfigured';
+      checks.creativeCanvases = 'unconfigured';
+      checks.canvasRevisions = 'unconfigured';
+      checks.agentConversations = 'unconfigured';
+      checks.agentMessages = 'unconfigured';
+    } else {
+      const tablesMap: Record<string, string> = {
+        creativeProjects: 'creative_projects',
+        creativeCanvases: 'creative_canvases',
+        canvasRevisions: 'canvas_revisions',
+        agentConversations: 'agent_conversations',
+        agentMessages: 'agent_messages'
+      };
+
+      for (const [checkKey, tableName] of Object.entries(tablesMap)) {
+        try {
+          const { error } = await supabaseAdmin.from(tableName).select('id').limit(1);
+          if (error) {
+            overallReady = false;
+            if (
+              error.message?.includes('Could not find the table') ||
+              error.message?.includes('relation') ||
+              error.code === '42P01'
+            ) {
+              checks[checkKey] = 'missing_table';
+            } else {
+              checks[checkKey] = 'error';
+            }
+          } else {
+            checks[checkKey] = 'ready';
+          }
+        } catch (err) {
+          overallReady = false;
+          checks[checkKey] = 'error';
+        }
+      }
+    }
+
+    const missingTables = Object.entries(checks)
+      .filter(([_k, status]) => status !== 'ready')
+      .map(([k]) => k);
+
+    return res.status(overallReady ? 200 : 503).json({
+      ready: overallReady,
+      schemaVersion: 'BASELINE-M1-R1',
+      storageMedium,
+      checks,
+      ...(overallReady ? {} : { missingTables })
+    });
+  });
 
   // Runtime Config Endpoint for client-side Supabase initialization
   app.get('/api/runtime-config', (req, res) => {
@@ -430,17 +347,21 @@ async function startServer() {
   // Mount modular API routers
   app.use('/api/admin', adminRoutes);
   app.use('/api/projects', projectRoutes);
+  app.use('/api/agent', agentConversationRoutes);
   app.use('/api/agent', agentRoutes);
   app.use('/api/canvases', canvasRoutes);
+  app.use('/api/canvases', layoutManifestRoutes);
+  app.use('/api/layout-manifests', layoutManifestRoutes);
   app.use('/api/asset-skus', assetRoutes);
   app.use('/api/asset-versions', assetRoutes);
   app.use('/api/product-dnas', productDnaRoutes);
   app.use('/api/product-dna-versions', productDnaRoutes);
   app.use('/api', productDnaRoutes);
   app.use('/api', assetRoutes);
+  app.use('/api', copyRoutes);
 
   // API Route for uploading mask and clean image
-  app.post('/api/pre_process/mask', upload.fields([{ name: 'clean_image', maxCount: 1 }, { name: 'mask_image', maxCount: 1 }]), async (req, res) => {
+  app.post('/api/pre_process/mask', authenticateToken as any, upload.fields([{ name: 'clean_image', maxCount: 1 }, { name: 'mask_image', maxCount: 1 }]), async (req, res) => {
     try {
       const files = req.files as { [fieldname: string]: Express.Multer.File[] };
       const cleanImageFile = files['clean_image']?.[0];
@@ -596,8 +517,9 @@ async function startServer() {
       return { cleanB64: parts[1] || parts[0], mimeType: 'image/jpeg' };
     }
 
-    // 3. Asset URL or key (/api/canvases/assets/obj_... or http(s)://... or obj_...)
-    if (trimmed.startsWith('/api/') || trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('obj_')) {
+    // 3. Internal asset URL or object key. External URLs are handled by the
+    // SSRF-safe resolver below and plain HTTP is never accepted.
+    if (trimmed.startsWith('/api/') || trimmed.startsWith('obj_')) {
       let fetchUrl = trimmed;
       if (trimmed.startsWith('obj_')) {
         fetchUrl = `http://localhost:3000/api/canvases/assets/${trimmed}`;
@@ -622,17 +544,133 @@ async function startServer() {
       }
     }
 
+    if (trimmed.startsWith('https://')) {
+      const resolved = await resolveAndValidateImage({
+        source: trimmed,
+        role: 'style_reference',
+        order: 0
+      });
+      return { cleanB64: resolved.cleanB64, mimeType: resolved.mimeType };
+    }
+    if (trimmed.startsWith('http://')) {
+      throw new ProviderError('远程参考图仅允许 HTTPS URL。', 'invalid_image_input', 400, false);
+    }
+
     // 4. Fallback: treat as raw base64 string
     return { cleanB64: trimmed, mimeType: 'image/jpeg' };
   }
 
   // API Route to proxy to API Gateway
   // Endpoint: /api/gateway/generate-image
-  app.post('/api/gateway/generate-image', async (req, res) => {
+  app.post('/api/gateway/generate-image', authenticateToken as any, async (req, res) => {
     try {
-      let { prompt, model = "google/gemini-3-pro-image-preview", aspectRatio = "1:1", images = [], resolution = "1K", seed } = req.body;
+      let { prompt, model = "google/gemini-3-pro-image-preview", generationIntent, aspectRatio = "1:1", images = [], resolution = "1K", seed, size, quality, format, output_format, background, moderation, mask } = req.body;
       const user = (req as any).user;
       const userUuid = user?.id || 'system';
+      const requestId = (req.headers['x-request-id'] as string) || `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      images = Array.isArray(images) ? images : [];
+      let normalizedReferences;
+      let intent: ImageIntent;
+      try {
+        normalizedReferences = normalizeImageReferences(images);
+        intent = parseGenerationIntent(generationIntent, normalizedReferences.length);
+      } catch (error) {
+        const normalized = normalizeProviderError(error, { model });
+        return res.status(normalized.statusCode).json(serializeProviderError(normalized, requestId));
+      }
+      let selectedModel;
+      try {
+        selectedModel = resolveImageModel(model, intent);
+      } catch (error) {
+        const normalized = normalizeProviderError(error, { model });
+        return res.status(normalized.statusCode).json(serializeProviderError(normalized, requestId));
+      }
+      model = selectedModel.id;
+
+      if (normalizedReferences.length > selectedModel.capabilities.maxInputImages) {
+        const error = new ProviderError(
+          `模型“${model}”最多支持 ${selectedModel.capabilities.maxInputImages} 张参考图。`,
+          'invalid_image_input',
+          400,
+          false,
+          undefined,
+          model
+        );
+        return res.status(400).json(serializeProviderError(error, requestId));
+      }
+
+      if (mask && intent !== 'image_edit') {
+        const error = new ProviderError('Mask 只能用于 image_edit 请求。', 'invalid_request', 400, false, undefined, model);
+        return res.status(400).json(serializeProviderError(error, requestId));
+      }
+      if (mask && !selectedModel.capabilities.mask) {
+        const error = new ProviderError(`模型“${model}”不支持 Mask 编辑。`, 'capability_unsupported', 400, false, undefined, model);
+        return res.status(400).json(serializeProviderError(error, requestId));
+      }
+
+      // Helper to calculate exact dimension string for OpenAI/VectorEngine based on aspect ratio
+      const computeOpenAiImageSize = (ratioStr: string, resStr: string): string => {
+        const is2K = resStr === '2K';
+        const is4K = resStr === '4K';
+
+        if (!ratioStr || ratioStr === 'Auto' || ratioStr === '1:1') {
+          return (is2K || is4K) ? "2048x2048" : "1024x1024";
+        }
+
+        const parts = String(ratioStr).trim().split(':');
+        if (parts.length === 2) {
+          const w = parseFloat(parts[0]);
+          const h = parseFloat(parts[1]);
+          if (!isNaN(w) && !isNaN(h) && w > 0 && h > 0) {
+            const ratio = w / h;
+
+            if (Math.abs(ratio - 1.0) < 0.05) {
+              return (is2K || is4K) ? "2048x2048" : "1024x1024";
+            }
+
+            // Map to standard supported OpenAI / VectorEngine image sizes
+            // 16:9 landscape (~1.777)
+            if (Math.abs(ratio - (16 / 9)) < 0.05 || Math.abs(ratio - 1.777) < 0.05) {
+              return (is2K || is4K) ? "2560x1440" : "1792x1024";
+            }
+            // 9:16 portrait (~0.5625)
+            if (Math.abs(ratio - (9 / 16)) < 0.05 || Math.abs(ratio - 0.5625) < 0.05) {
+              return (is2K || is4K) ? "1440x2560" : "1024x1792";
+            }
+            // 4:3 (~1.333)
+            if (Math.abs(ratio - (4 / 3)) < 0.05 || Math.abs(ratio - 1.333) < 0.05) {
+              return (is2K || is4K) ? "2048x1536" : "1472x1104";
+            }
+            // 3:4 (~0.75)
+            if (Math.abs(ratio - (3 / 4)) < 0.05 || Math.abs(ratio - 0.75) < 0.05) {
+              return (is2K || is4K) ? "1536x2048" : "1104x1472";
+            }
+            // 3:2 (~1.5)
+            if (Math.abs(ratio - 1.5) < 0.05) {
+              return (is2K || is4K) ? "2048x1365" : "1536x1024";
+            }
+            // 2:3 (~0.666)
+            if (Math.abs(ratio - (2 / 3)) < 0.05) {
+              return (is2K || is4K) ? "1365x2048" : "1024x1536";
+            }
+            // 21:9 (~2.333)
+            if (Math.abs(ratio - (21 / 9)) < 0.05 || ratio >= 2.0) {
+              return (is2K || is4K) ? "2560x1080" : "1792x768";
+            }
+
+            // Fallbacks
+            if (ratio > 1.2) {
+              return (is2K || is4K) ? "2560x1440" : "1792x1024";
+            } else if (ratio < 0.8) {
+              return (is2K || is4K) ? "1440x2560" : "1024x1792";
+            } else {
+              return (is2K || is4K) ? "2048x2048" : "1024x1024";
+            }
+          }
+        }
+
+        return (is2K || is4K) ? "2048x2048" : "1024x1024";
+      };
 
       // Helper to match the closest supported aspect ratio for Google Imagen model to prevent API errors
       const getClosestSupportedAspectRatio = (ratioStr: string): string => {
@@ -736,10 +774,22 @@ async function startServer() {
       // 1. DYNAMIC CONFIG FETCHING
       let { apiKey, baseUrl, deptId, provider, routingMode, method1Key } = await resolveApiConfig(userUuid);
       
-      const isKeyInvalid = (key: string | undefined) => !key || key.includes('在这里填入') || key.includes('placeholder') || key.trim() === '';
-
-      if (isKeyInvalid(apiKey)) {
-        return res.status(401).json({ error: { message: "系统或所属部门未配置有效的 API KEY，请联系管理员在控制面板设置。" } });
+      if (!isProviderKeyValid(apiKey)) {
+        const error = new ProviderError(
+          '系统或所属部门未配置有效的 Provider，请联系管理员在控制面板设置。',
+          'authentication',
+          503,
+          false,
+          provider,
+          model
+        );
+        return res.status(503).json(serializeProviderError(error, requestId));
+      }
+      try {
+        assertProviderModelCompatibility(selectedModel, provider, intent);
+      } catch (error) {
+        const normalized = normalizeProviderError(error, { provider, model });
+        return res.status(normalized.statusCode).json(serializeProviderError(normalized, requestId));
       }
 
       if (baseUrl && !baseUrl.startsWith('http')) {
@@ -878,23 +928,45 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
         }
       }
 
-      // Typical Google AI format for generateContent
-      const parts = [];
-      if (images && images.length > 0) {
-        for (const img of images) {
-          const rawData = typeof img === 'string' ? img : (img.data || img.base64Data || img.url || '');
-          if (!rawData) continue;
-          const { cleanB64, mimeType } = await resolveImageToBase64(rawData);
-
-          if (cleanB64) {
-            parts.push({
-              inlineData: {
-                mimeType: mimeType,
-                data: cleanB64
-              }
-            });
-          }
+      // Normalize legacy references, resolve internal object URLs locally, then
+      // apply one security/metadata validation path before any Provider call.
+      const materializedReferences = [];
+      for (const reference of normalizedReferences) {
+        if (reference.source.startsWith('/api/') || reference.source.startsWith('obj_')) {
+          const internal = await resolveImageToBase64(reference.source);
+          materializedReferences.push({
+            ...reference,
+            source: `data:${internal.mimeType};base64,${internal.cleanB64}`,
+            declaredMimeType: internal.mimeType
+          });
+        } else {
+          materializedReferences.push(reference);
         }
+      }
+
+      let resolvedReferenceImages: ResolvedImageReference[] = [];
+      let resolvedMask: Awaited<ReturnType<typeof validateMask>> | undefined;
+      try {
+        resolvedReferenceImages = await resolveAndValidateImages(materializedReferences, String(prompt || ''));
+        if (intent === 'image_edit' && resolvedReferenceImages.length === 0) {
+          throw new ProviderError(
+            '图像编辑请求未包含可用的参考图，已拒绝降级为文生图。',
+            'invalid_image_input', 400, false, provider, model
+          );
+        }
+        if (mask) resolvedMask = await validateMask(mask, resolvedReferenceImages[0]);
+      } catch (error) {
+        const normalized = normalizeProviderError(error, { provider, model });
+        return res.status(normalized.statusCode).json(serializeProviderError(normalized, requestId));
+      }
+
+      // Gemini receives explicit role labels immediately before each image and
+      // preserves the normalized reference order.
+      const parts: any[] = [];
+      for (let index = 0; index < resolvedReferenceImages.length; index++) {
+        const image = resolvedReferenceImages[index];
+        parts.push({ text: `[参考图${index + 1}｜${IMAGE_ROLE_LABELS[image.role]}${image.referenceAssetId ? `｜资产ID:${image.referenceAssetId}` : ''}]` });
+        parts.push({ inlineData: { mimeType: image.mimeType, data: image.cleanB64 } });
       }
       parts.push({ text: prompt });
 
@@ -925,9 +997,8 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
         ]
       };
 
-      if (Object.keys(generationConfig).length > 0) {
-        payload.generationConfig = generationConfig;
-      }
+      generationConfig.responseModalities = ['TEXT', 'IMAGE'];
+      payload.generationConfig = generationConfig;
 
       const headers: any = { 
         "Content-Type": "application/json",
@@ -942,129 +1013,112 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
       }
 
       const doFetch = async (currentBaseUrl: string, currentApiKey: string, currentProvider: string) => {
-        let firstModelOption = model;
+        const registeredModel = resolveImageModel(model, intent);
+        assertProviderModelCompatibility(registeredModel, currentProvider, intent);
+        const modelAdapter = getImageProviderAdapter(registeredModel);
 
-        let cleanModel = firstModelOption;
-        if (cleanModel.startsWith("google/")) {
-          cleanModel = cleanModel.replace("google/", "");
-        } else if (cleanModel.startsWith("openai/")) {
-          cleanModel = cleanModel.replace("openai/", "");
-        }
-
-        // Map legacy/preview model names to official production model names if needed
-        let preferredModel = cleanModel;
-        if (cleanModel === 'gemini-3.1-flash-image-preview' || cleanModel === 'gemini-3.1-flash-image') {
-          preferredModel = 'gemini-2.5-flash-image';
-        } else if (cleanModel === 'gemini-3-pro-image-preview' || cleanModel === 'gemini-3-pro-image') {
-          preferredModel = 'imagen-3.0-generate-002';
-        }
-
-        // Construct prioritized candidate models array
-        const candidateModels: string[] = [preferredModel, firstModelOption, cleanModel];
-
-        if (cleanModel === 'gpt-image-2' || firstModelOption.includes('gpt-image-2')) {
-          candidateModels.length = 0;
-          if (currentProvider === 'google' || currentBaseUrl.includes('googleapis.com')) {
-            candidateModels.push('imagen-3.0-generate-002');
-            candidateModels.push('gemini-2.5-flash-image');
-          } else {
-            candidateModels.push('gpt-image-2');
-            candidateModels.push('imagen-3.0-generate-002');
-            candidateModels.push('gemini-2.5-flash-image');
-          }
-        } else if (cleanModel.includes('3-pro') || cleanModel.includes('pro')) {
-          candidateModels.push('imagen-3.0-generate-002');
-          candidateModels.push('gemini-2.5-flash-image');
-          candidateModels.push('imagen-3.0-fast-generate-001');
-        } else if (cleanModel.includes('flash')) {
-          candidateModels.push('gemini-2.5-flash-image');
-          candidateModels.push('imagen-3.0-generate-002');
-          candidateModels.push('imagen-3.0-fast-generate-001');
-        } else if (cleanModel.includes('gpt-image')) {
-          if (currentProvider === 'google' || currentBaseUrl.includes('googleapis.com')) {
-            candidateModels.push('imagen-3.0-generate-002');
-            candidateModels.push('gemini-2.5-flash-image');
-          } else {
-            candidateModels.push('gpt-image-2');
-            candidateModels.push('gpt-image-1.5');
-            candidateModels.push('gpt-image-1');
-          }
-        } else {
-          candidateModels.push('imagen-3.0-generate-002');
-          candidateModels.push('gemini-2.5-flash-image');
-          candidateModels.push('imagen-3.0-fast-generate-001');
-        }
-
-        let uniqueCandidates = Array.from(new Set(candidateModels));
-        if (currentProvider === 'google' || currentBaseUrl.includes('googleapis.com')) {
-          uniqueCandidates = uniqueCandidates.filter(m => !m.toLowerCase().includes('gpt-image'));
-          if (uniqueCandidates.length === 0) {
-            uniqueCandidates = ['imagen-3.0-generate-002', 'gemini-2.5-flash-image'];
-          }
-        }
-
-        const executeRequestForModel = async (tgtModel: string) => {
-          let finalModel = tgtModel;
-          if (finalModel.startsWith("google/")) {
-            finalModel = finalModel.replace("google/", "");
-          } else if (finalModel.startsWith("openai/")) {
-            finalModel = finalModel.replace("openai/", "");
-          }
-          
-          let targetUrl = `${currentBaseUrl.replace(/\/+$/, '')}/models/${finalModel}:generateContent`;
+        const executeRequestForModel = async () => {
+          const finalModel = registeredModel.id;
+          let targetUrl = modelAdapter.buildEndpoint(currentBaseUrl, registeredModel, intent);
           let reqPayload: any = payload;
           
           let isMultipart = false;
           let formData: FormData | null = null;
           
-          // Handle OpenAI format for VectorEngine/RouterHub
-          const isOpenAI = finalModel.includes('gpt-image');
+          // Handle standard OpenAI Images and the VectorEngine-only JSON multi-image protocol.
+          const isOpenAI = registeredModel.transport !== 'gemini_native';
           if (isOpenAI) {
-            let baseForOpenAI = currentBaseUrl.replace(/\/v1beta\/?$/, '').replace(/\/v1\/?$/, '').replace(/\/+$/, '');
-            
-            let sizeStr = "1536x1024";
-            if (aspectRatio === '3:4' || aspectRatio === '9:16' || aspectRatio === '1:2') {
-               sizeStr = "1024x1536";
-            } else if (aspectRatio === '1:1') {
-               sizeStr = "1024x1024";
+            let sizeStr = "1024x1024";
+            if (size && typeof size === 'string' && (size.includes('x') || size === 'auto')) {
+              sizeStr = size;
             } else {
-               sizeStr = "1536x1024";
+              sizeStr = computeOpenAiImageSize(aspectRatio, resolution);
             }
 
-            if (images && images.length > 0 && images[0]?.data) {
-              const refImg = images[0];
-              const cleanData = refImg.data.includes(',') ? refImg.data.split(',')[1] : refImg.data;
-              if (cleanData && cleanData.length >= 50) {
-                const imgBuffer = Buffer.from(cleanData, 'base64');
-                if (imgBuffer.length <= 50 * 1024 * 1024) {
-                  targetUrl = `${baseForOpenAI}/v1/images/edits`;
-                  isMultipart = true;
-                  formData = new FormData();
-                  formData.append('model', 'gpt-image-2');
-                  formData.append('prompt', prompt);
-                  formData.append('n', "1");
-                  formData.append('size', sizeStr);
-                  formData.append('quality', 'high');
-                  formData.append('output_format', 'png');
-                  formData.append('input_fidelity', 'high');
-                  formData.append('background', 'auto');
+            const imgQuality = quality || 'high';
+            const imgFormat = output_format || format || (resolvedReferenceImages.length > 0 ? 'png' : 'jpeg');
+            const bgVal = background || 'auto';
+            const modVal = moderation || 'low';
+            const roleManifest = buildImageRoleManifest(resolvedReferenceImages);
+            const promptWithRoles = roleManifest ? `${prompt}\n\n[参考图角色与顺序] ${roleManifest}` : prompt;
 
-                  const mimeType = refImg.mimeType || 'image/png';
-                  const ext = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : (mimeType.includes('webp') ? 'webp' : 'png');
-                  const blob = new Blob([imgBuffer], { type: mimeType });
-                  formData.append('image', blob, `product_reference.${ext}`);
-                }
+            if (intent === 'image_edit' && registeredModel.transport === 'openai_images_json_multi') {
+              const publicUrls = resolvedReferenceImages.map(image => image.publicUrl);
+              if (publicUrls.some(url => !url)) {
+                throw new ProviderError(
+                  'gpt-image-2-all 专有协议只接受可公开访问的 HTTPS 图片 URL，不接受 Base64 或站内对象键。',
+                  'invalid_image_input', 400, false, currentProvider, finalModel
+                );
               }
+              if (!modelAdapter.buildJsonPayload) {
+                throw new ProviderError(
+                  '当前 Provider Adapter 缺少 JSON 多图协议实现。',
+                  'capability_unsupported', 500, false, currentProvider, finalModel
+                );
+              }
+              reqPayload = modelAdapter.buildJsonPayload({
+                model: finalModel,
+                publicUrls: publicUrls as string[],
+                prompt: promptWithRoles,
+                size: sizeStr,
+                aspectRatio: aspectRatio,
+                quality: imgQuality,
+                outputFormat: imgFormat,
+                background: bgVal,
+                moderation: modVal
+              });
+            } else if (intent === 'image_edit') {
+              formData = new FormData();
+              formData.append('model', finalModel);
+              formData.append('prompt', promptWithRoles);
+              formData.append('n', "1");
+              formData.append('size', sizeStr);
+              if (aspectRatio) {
+                formData.append('aspect_ratio', aspectRatio);
+                formData.append('aspectRatio', aspectRatio);
+              }
+              formData.append('quality', imgQuality);
+              formData.append('output_format', imgFormat);
+              if (bgVal) formData.append('background', bgVal);
+              if (modVal) formData.append('moderation', modVal);
+
+              if (resolvedMask) {
+                formData.append('mask', new Blob([resolvedMask.buffer], { type: 'image/png' }), 'mask.png');
+              }
+
+              let appendedCount = 0;
+              for (let idx = 0; idx < resolvedReferenceImages.length && idx < registeredModel.capabilities.maxInputImages; idx++) {
+                const imgObj = resolvedReferenceImages[idx];
+                const ext = imgObj.mimeType === 'image/jpeg' ? 'jpg' : (imgObj.mimeType === 'image/webp' ? 'webp' : 'png');
+                const safeAsset = String(imgObj.referenceAssetId || idx + 1).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 60);
+                const blob = new Blob([imgObj.buffer], { type: imgObj.mimeType });
+                formData.append('image', blob, `${String(idx + 1).padStart(2, '0')}_${imgObj.role}_${safeAsset}.${ext}`);
+                appendedCount++;
+              }
+
+              if (appendedCount === 0) {
+                throw new ProviderError(
+                  '图像编辑请求的参考图无效，已拒绝降级为文生图。',
+                  'invalid_image_input',
+                  400,
+                  false,
+                  currentProvider,
+                  finalModel
+                );
+              }
+              isMultipart = true;
             }
 
-            if (!isMultipart) {
-              targetUrl = `${baseForOpenAI}/v1/images/generations`;
+            if (intent === 'text_to_image') {
               reqPayload = {
-                model: 'gpt-image-2',
+                model: finalModel,
                 prompt: prompt,
                 n: 1,
                 size: sizeStr,
-                quality: 'high'
+                aspect_ratio: aspectRatio,
+                aspectRatio: aspectRatio,
+                quality: imgQuality,
+                output_format: imgFormat
               };
             }
           }
@@ -1073,7 +1127,9 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
             targetUrl += `?key=${currentApiKey}`;
           }
 
-          const fetchHeaders: any = {};
+          const fetchHeaders: any = {
+            "Accept": "application/json"
+          };
           
           if (!isMultipart) {
             fetchHeaders["Content-Type"] = "application/json";
@@ -1088,8 +1144,7 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
           fileLog(`[OpenAI Proxy Debug] targetUrl: ${targetUrl}, isMultipart: ${isMultipart}`);
 
           const controller = new AbortController();
-          const isVecEngine = currentProvider === 'vectorengine' || currentBaseUrl.includes('vectorengine');
-          const timeoutMs = isVecEngine ? 45000 : 120000;
+          const timeoutMs = 120000;
           const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
           let resObj;
@@ -1103,7 +1158,14 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
           } catch (fetchErr: any) {
             clearTimeout(timeoutId);
             if (fetchErr.name === 'AbortError') {
-               throw new Error(`Upstream error: timeout after ${Math.round(timeoutMs / 1000)} seconds`);
+               throw new ProviderError(
+                 `上游请求在 ${Math.round(timeoutMs / 1000)} 秒后超时。`,
+                 'timeout',
+                 504,
+                 true,
+                 currentProvider,
+                 finalModel
+               );
             }
             throw fetchErr;
           }
@@ -1113,103 +1175,99 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
           fileLog(`[OpenAI Proxy Debug] upstream status: ${resObj.status}`);
 
           const text = await resObj.text();
-          fileLog(`[OpenAI Proxy Debug] fetched texts: ` + text.substring(0, 300));
-          
-          if (resObj.status === 401 || resObj.status === 403) {
-             throw new Error(`[Status ${resObj.status}] OpenAI 接口身份校验或模型访问拒绝，请检查 API Key、组织验证以及 gpt-image-2 模型的调用权限 (${text.substring(0, 150)})`);
-          }
 
           let data;
           try {
             data = JSON.parse(text);
           } catch (jsonErr) {
-            if (resObj.status === 404) {
-               throw new Error(`Upstream returned 404 (Not Found). Please check if the model "${tgtModel}" is supported by this endpoint.`);
-            }
-            throw new Error(`Invalid JSON response from upstream (${resObj.status}): ${text.substring(0, 100)}`);
+            throw new ProviderError(
+              `上游返回了无法解析的响应（HTTP ${resObj.status}）。`,
+              'invalid_upstream_response',
+              502,
+              false,
+              currentProvider,
+              finalModel,
+              resObj.status
+            );
           }
 
           if (!resObj.ok) {
-            const errStatus = resObj.status;
-            throw new Error(`[Status ${errStatus}] ` + (data.error?.message || resObj.statusText || `Upstream error ${resObj.status}`));
+            throw providerErrorFromStatus(
+              resObj.status,
+              data.error?.message || data.message || resObj.statusText || `上游错误 ${resObj.status}`,
+              currentProvider,
+              finalModel
+            );
           }
           
           // Transform OpenAI response to Google format so frontend parses correctly
           if (isOpenAI) {
-             let b64Data = data.data?.[0]?.b64_json || data.data?.[0]?.b64 || data.data?.[0]?.base64 || data.data?.[0]?.image || (typeof data.data?.[0] === 'string' ? data.data[0] : undefined);
-             
-             if (!b64Data && data.data?.[0]?.url) {
-                try {
-                  const imgRes = await fetch(data.data[0].url);
-                  const imgBuffer = await imgRes.arrayBuffer();
-                  b64Data = Buffer.from(imgBuffer).toString('base64');
-                } catch (e: any) {
-                  throw new Error(`Failed to download image URL returned by API: ${e.message}`);
-                }
-             }
-             
-             if (!b64Data || typeof b64Data !== 'string' || b64Data.trim() === '' || b64Data.length < 100) {
-                throw new Error(`OpenAI 响应数据缺少有效的 response.data[0].b64_json。内容: ${text.substring(0, 200)}`);
-             }
-             data = {
-               actualModel: 'gpt-image-2',
-               provider: 'openai',
-               candidates: [
-                 {
-                   content: {
-                     parts: [
-                       {
-                         inlineData: {
-                           mimeType: "image/png",
-                           data: b64Data
-                         }
-                       }
-                     ]
-                   }
+             const normalizedImages: Array<{ mimeType: string; data: string }> = [];
+             for (const item of Array.isArray(data.data) ? data.data : []) {
+               let imageData = item?.b64_json || item?.b64 || item?.base64 || item?.image || (typeof item === 'string' ? item : undefined);
+               let mimeType = item?.mime_type || item?.mimeType || 'image/png';
+               if (!imageData && item?.url) {
+                 try {
+                   const downloaded = await resolveAndValidateImage({
+                     source: item.url,
+                     role: 'style_reference',
+                     order: 0
+                   });
+                   mimeType = downloaded.mimeType;
+                   imageData = downloaded.cleanB64;
+                 } catch (downloadError: any) {
+                   throw new ProviderError(
+                     `无法下载上游返回的图像：${downloadError.message}`,
+                     'invalid_upstream_response',
+                     502,
+                     false,
+                     currentProvider,
+                     finalModel
+                   );
                  }
-               ]
-             };
+               }
+               if (typeof imageData === 'string') normalizedImages.push({ mimeType, data: imageData });
+             }
+             try {
+               data = buildNormalizedImageResponse(normalizedImages, {
+                 actualModel: finalModel,
+                 provider: currentProvider,
+                 providerRequestId: data.id || resObj.headers.get('x-request-id'),
+                 usage: data.usage
+               });
+             } catch (error: any) {
+               throw new ProviderError(
+                 error.message,
+                 'invalid_upstream_response',
+                 502,
+                 false,
+                 currentProvider,
+                 finalModel
+               );
+             }
+          } else {
+             try {
+               data = normalizeGeminiImageResponse(data, {
+                 actualModel: finalModel,
+                 provider: currentProvider
+               });
+             } catch (error: any) {
+               throw new ProviderError(
+                 error.message,
+                 'invalid_upstream_response',
+                 502,
+                 false,
+                 currentProvider,
+                 finalModel
+               );
+             }
           }
 
           return data;
         };
 
-        let lastError: any = null;
-        for (const candidate of uniqueCandidates) {
-          try {
-            const res = await executeRequestForModel(candidate);
-            return { data: res, actualModel: candidate };
-          } catch (err: any) {
-            lastError = err;
-            const errMsg = err.message || "";
-
-            const isKeyAuthError = errMsg.toLowerCase().includes("api key not valid") ||
-                                  errMsg.toLowerCase().includes("invalid api key") ||
-                                  errMsg.includes("UNAUTHENTICATED") ||
-                                  errMsg.includes("PERMISSION_DENIED") ||
-                                  errMsg.includes("401") ||
-                                  errMsg.includes("403");
-
-            if (isKeyAuthError) {
-              console.warn(`[Proxy candidate] Provider ${currentProvider} failed with auth/key error: ${errMsg}. Aborting remaining model candidates.`);
-              throw err;
-            }
-
-            const isModelNotFoundError = (errMsg.includes("404") || 
-                                          errMsg.includes("not found") || 
-                                          errMsg.includes("supported") || 
-                                          errMsg.includes("Status 404") ||
-                                          errMsg.includes("INVALID_ARGUMENT")) &&
-                                         !errMsg.includes("API key");
-            if (isModelNotFoundError) {
-              console.log(`[Proxy fallback] Model candidate "${candidate}" failed (${errMsg}). Retrying next candidate...`);
-              continue;
-            } else {
-              throw err;
-            }
-          }
-        }
-        throw lastError || new Error(`All candidate image generation models failed for input model "${model}"`);
+        const result = await executeRequestForModel();
+        return { data: result, actualModel: registeredModel.id };
       };
 
       res.setHeader('Content-Type', 'application/json');
@@ -1225,46 +1283,37 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
         let usedProvider = provider;
         const generateStartTime = Date.now();
         try {
-          const fetchRes = await doFetch(baseUrl, apiKey, provider);
+          const fetchRes = await doFetch(baseUrl, apiKey!, provider);
           fetchResult = fetchRes.data;
           actualModelUsed = fetchRes.actualModel;
         } catch (initialErr: any) {
-          const errMsg = initialErr.message || "";
-          // Determine if we should fallback from vectorengine to routerhub.
-          // In Hybrid mode, we fallback on practically any error (timeout, 401, 500, etc).
-          // Otherwise we only fallback on specific 5xx / timeout.
+          const normalizedInitialError = normalizeProviderError(initialErr, { provider, model });
+          const errMsg = normalizedInitialError.message;
           const isHybrid = routingMode === 2;
-          const shouldFallback = isHybrid || 
-                                 errMsg.toLowerCase().includes('saturated') || 
-                                 errMsg.includes('Upstream error 5') || 
-                                 errMsg.includes('timeout') || 
-                                 errMsg.includes('[Status 5') || 
-                                 errMsg.includes('[Status 429') ||
-                                 errMsg.includes('[Status 401') ||
-                                 errMsg.includes('[Status 400') ||
-                                 errMsg.includes('[Status 402');
+          const shouldFallback = ['timeout', 'rate_limited', 'upstream_unavailable'].includes(normalizedInitialError.category);
 
-          if ((provider === 'vectorengine' || baseUrl.includes('vectorengine')) && shouldFallback) {
+          if ((provider === 'vectorengine' || baseUrl.includes('vectorengine')) && (shouldFallback || (isHybrid && normalizedInitialError.retryable))) {
             const fallback = await getFallbackConfig(deptId, method1Key);
 
             if (fallback && fetchResult === undefined) {
               console.log(`[O&M: Fallback Activated] VectorEngine failed (${errMsg}). Retrying with fallback provider ${fallback.provider} (${fallback.baseUrl})...`);
               usedProvider = fallback.provider;
               try {
-                const fetchRes = await doFetch(fallback.baseUrl, fallback.apiKey, fallback.provider);
+                const fetchRes = await doFetch(fallback.baseUrl, fallback.apiKey!, fallback.provider);
                 fetchResult = fetchRes.data;
                 actualModelUsed = fetchRes.actualModel;
               } catch (fallbackErr: any) {
-                console.error(`[O&M: Fallback Failed] Fallback ${fallback.provider} also failed: ${fallbackErr.message}`);
-                throw new Error(`Primary API Error: ${errMsg}. Fallback API Error: ${fallbackErr.message}`);
+                const normalizedFallbackError = normalizeProviderError(fallbackErr, { provider: fallback.provider, model });
+                console.error(`[O&M: Fallback Failed] Fallback ${fallback.provider} also failed: ${normalizedFallbackError.message}`);
+                throw normalizedFallbackError;
               }
             } else {
               console.error(`[O&M: Fallback Skipped] VectorEngine failed (${errMsg}) and no valid fallback API key was found.`);
-              throw new Error(`VectorEngine 接口响应超时或报错 (${errMsg})。请在后台配置 RouterHub / Gemini 兜底密钥。`);
+              throw normalizedInitialError;
             }
           } else {
             console.error(`[O&M: Upstream Error] Provider ${provider} failed on ${baseUrl}: ${errMsg}`);
-            throw initialErr;
+            throw normalizedInitialError;
           }
         }
         
@@ -1276,7 +1325,7 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
         }
 
         // Validate image response success and structure before charging
-        const isSuccessfulResponse = isValidImageResponse(fetchResult);
+        const isSuccessfulResponse = hasValidImages(fetchResult);
 
         let pointsDeducted = 0;
         // Billing Logic using consolidated helper - log failures as 0 points with clear warning tags
@@ -1339,73 +1388,63 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
                     else if (resolution === '2K') maxTargetDim = 2048;
                     else if (resolution === '4K') maxTargetDim = 4096;
 
-                    let finalW = targetWidth;
-                    let finalH = targetHeight;
-                    
-                    if (finalW && finalH) {
-                      // Case A: Custom aspect ratio or Auto layout is specified.
-                      // If the maximum dimension of the target is smaller than the requested resolution, upscale proportionally!
-                      const currentMax = Math.max(finalW, finalH);
-                      if (currentMax < maxTargetDim) {
-                        const scaleScale = maxTargetDim / currentMax;
-                        finalW = Math.round(finalW * scaleScale);
-                        finalH = Math.round(finalH * scaleScale);
-                        console.log(`[Sharp Engine] Custom boundary upscaled to match ${resolution} (${maxTargetDim}px): ${finalW}x${finalH} (factor: ${scaleScale.toFixed(2)}x)`);
-                      }
-                    } else if (meta.width && meta.height) {
-                      // Case B: Standard aspect ratio. Scale native dimensions to requested resolution.
-                      const currentNativeMax = Math.max(meta.width, meta.height);
-                      if (currentNativeMax < maxTargetDim) {
-                        const scaleScale = maxTargetDim / currentNativeMax;
-                        finalW = Math.round(meta.width * scaleScale);
-                        finalH = Math.round(meta.height * scaleScale);
-                        console.log(`[Sharp Engine] Native boundary upscaled to match ${resolution} (${maxTargetDim}px): ${finalW}x${finalH} (factor: ${scaleScale.toFixed(2)}x)`);
-                      } else {
-                        // Keep current size if already at or larger than target resolution
-                        finalW = meta.width;
-                        finalH = meta.height;
-                      }
-                    }
-                    
-                    if (finalW && finalH) {
-                      console.log(`[Sharp Engine] Rendering final high-fidelity upscale to: ${finalW}x${finalH} (Mode: ${resolution})`);
-                      
-                      let fitMode: 'cover' | 'fill' = 'cover';
-                      let compressionPercent = 100;
-                      if (meta.width && meta.height) {
-                        const rGen = meta.width / meta.height;
-                        const rTarget = finalW / finalH;
-                        // Calculate percentage of the generated image kept under 'cover' (no-distortion cropping)
-                        const coverKeptPercentage = Math.min(rGen / rTarget, rTarget / rGen) * 100;
-                        compressionPercent = Math.round(coverKeptPercentage * 10) / 10;
-                        console.log(`[Sharp Engine] 'cover' fit would keep ${compressionPercent}% of original generated content.`);
-                        
-                        // User requested to preserve at least 95% of original image output.
-                        // If 'cover' crops more than 5% (kept < 95%), we switch to 'fill' to stretch slightly but guarantee 100% of generated content is preserved.
-                        if (coverKeptPercentage < 95) {
-                          fitMode = 'fill';
-                          console.log(`[Sharp Engine] Keeping ${compressionPercent}% is below 95% threshold. Switching fit mode to 'fill' to preserve 100% of original generated content without cropping.`);
-                          compressionPercent = 100;
+                    if (meta.width && meta.height) {
+                      const nativeRatio = meta.width / meta.height;
+
+                      // Parse target ratio requested by the user
+                      let targetRatio = nativeRatio;
+                      if (targetWidth && targetHeight) {
+                        targetRatio = targetWidth / targetHeight;
+                      } else if (originalAspectRatio && originalAspectRatio !== 'Auto' && originalAspectRatio !== 'Custom') {
+                        const parts = String(originalAspectRatio).split(':');
+                        if (parts.length === 2) {
+                          const tw = parseFloat(parts[0]);
+                          const th = parseFloat(parts[1]);
+                          if (!isNaN(tw) && !isNaN(th) && th > 0) {
+                            targetRatio = tw / th;
+                          }
+                        }
+                      } else if (aspectRatio && aspectRatio !== 'Auto' && aspectRatio !== 'Custom') {
+                        const parts = String(aspectRatio).split(':');
+                        if (parts.length === 2) {
+                          const tw = parseFloat(parts[0]);
+                          const th = parseFloat(parts[1]);
+                          if (!isNaN(tw) && !isNaN(th) && th > 0) {
+                            targetRatio = tw / th;
+                          }
                         }
                       }
 
-                      cropRetentionRate = compressionPercent;
-                      finalFitModeUsed = fitMode;
+                      let finalW: number;
+                      let finalH: number;
+
+                      if (targetRatio >= 1) {
+                        finalW = Math.max(meta.width, maxTargetDim);
+                        finalH = Math.round(finalW / targetRatio);
+                      } else {
+                        finalH = Math.max(meta.height, maxTargetDim);
+                        finalW = Math.round(finalH * targetRatio);
+                      }
+
+                      console.log(`[Sharp Engine] Rendering target aspect ratio (${targetRatio.toFixed(3)}) output: ${finalW}x${finalH} (Native ratio: ${nativeRatio.toFixed(3)}, Mode: ${resolution})`);
+
+                      cropRetentionRate = 100;
+                      finalFitModeUsed = 'target_proportional';
 
                       const resizedBuffer = await sharp(rawBuffer)
                         .resize(finalW, finalH, {
-                          fit: fitMode,
+                          fit: 'cover',
                           position: 'center',
                           kernel: 'lanczos3'
                         })
-                        .png({ compressionLevel: 1, force: true }) // Minimum compression to preserve file size logic and fast processing
+                        .png({ compressionLevel: 1, force: true }) // Minimum compression for maximum quality
                         .toBuffer();
                       
                       part.inlineData.data = resizedBuffer.toString('base64');
                       part.inlineData.mimeType = 'image/png';
                     } else {
-                      // Fallback: Even if no resizing is possible, output as a premium PNG container to preserve detail losslessly
-                      console.log(`[Sharp Engine] Preserving native size but outputting as premium PNG`);
+                      // Fallback: Even if metadata reading fails, output as PNG container without distortion
+                      console.log(`[Sharp Engine] Preserving native size as lossless PNG fallback`);
                       const pngBuffer = await sharp(rawBuffer)
                         .png({ compressionLevel: 1, force: true })
                         .toBuffer();
@@ -1419,6 +1458,11 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
           } catch (resizeErr) {
             console.error("Failed to enhance target image resolution & quality:", resizeErr);
           }
+          fetchResult.images = fetchResult.candidates.flatMap((candidate: any) =>
+            (candidate?.content?.parts || [])
+              .map((part: any) => part?.inlineData)
+              .filter((image: any) => image?.data)
+          );
         }
 
         res.write(JSON.stringify({ 
@@ -1433,13 +1477,15 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
        console.error("API proxy error:", e);
        clearInterval(heartbeatInterval);
        if (e.code === 'EPIPE' || e.message?.includes('EPIPE')) return res.end();
-       res.write(JSON.stringify({ error: { message: e.message } }));
+       res.write(JSON.stringify(serializeProviderError(normalizeProviderError(e, { provider, model }), requestId)));
        res.end();
     }
   } catch (outerError: any) {
     console.error("Outer API proxy error:", outerError);
     if (!res.headersSent) {
-      res.status(500).json({ error: { message: outerError.message } });
+      const requestId = (req.headers['x-request-id'] as string) || undefined;
+      const normalized = normalizeProviderError(outerError);
+      res.status(normalized.statusCode).json(serializeProviderError(normalized, requestId));
     }
   }
 });
@@ -1584,7 +1630,7 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
   });
 
   // Generic proxy for standard GoogleGenAI frontend SDK requests
-  app.use(['/v1beta', '/v1alpha', '/v1'], async (req, res) => {
+  app.use(['/v1beta', '/v1alpha', '/v1'], authenticateToken as any, async (req, res) => {
     // 简单获取传递来的请求模型信息为了记录日志
     const originalUrl = req.originalUrl;
     const modelMatch = originalUrl.match(/models\/([^\:]+)/);
@@ -1592,11 +1638,9 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
     
     // Use authenticated identity
     const user = (req as any).user;
-    const userUuid = user?.id || 'system';
+    const userUuid = user.id;
 
     try {
-      const isKeyInvalid = (key: string | undefined) => !key || key.includes('在这里填入') || key.includes('placeholder') || key.trim() === '';
-
       if (userUuid !== 'system') {
         const { data: profile } = await supabaseAdmin
           .from('profiles')
@@ -1614,7 +1658,7 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
 
       let { apiKey, baseUrl, deptId, provider, routingMode, method1Key } = await resolveApiConfig(userUuid);
 
-      if (isKeyInvalid(apiKey)) {
+      if (!isProviderKeyValid(apiKey)) {
         return res.status(401).json({ error: { message: "API Key is missing or invalid." } });
       }
 
@@ -1729,7 +1773,7 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
           res.setHeader(key, value);
         }
       });
-      res.setHeader("X-Proxy-Provider", baseUrl.includes("routerhub") ? "routerhub" : "google");
+      res.setHeader("X-Proxy-Provider", usedProvider);
       res.status(response.status);
       
       // 流式/分块读取代理响应，并尝试从中截获 usageMetadata 
@@ -1813,26 +1857,64 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
         console.warn("Detected EPIPE in generic proxy: client closed connection.");
         return;
       }
-      res.status(500).json({ error: err.message });
+      const requestId = (req.headers['x-request-id'] as string) || undefined;
+      const normalized = normalizeProviderError(err, { model });
+      res.status(normalized.statusCode).json(serializeProviderError(normalized, requestId));
     }
   });
 
-  // Global Error Handler to catch things like payload size exceeded (413) and ensure JSON response
-  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    console.error("Express App Error:", err.message || err);
-    if (res.headersSent) return next(err);
-    const status = err.statusCode || err.status || 500;
-    const errorMsg = err.message || (status === 413 ? "Payload Too Large: The image is too large." : "Server Error");
-    res.status(status).json({ 
+  // 1. 404 handler for unmatched /api/* routes (preventing SPA fallback from returning HTML)
+  app.use('/api', (req: express.Request, res: express.Response) => {
+    return res.status(404).json({
       success: false,
-      error: errorMsg, 
-      message: errorMsg,
-      statusCode: status
+      error: {
+        code: 'API_ROUTE_NOT_FOUND',
+        message: '请求的 API 路由不存在'
+      }
+    });
+  });
+
+  // 2. Four-parameter Express Error Middleware for runtime exceptions in API routes
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!req.path.startsWith('/api/')) {
+      return next(err);
+    }
+
+    if (res.headersSent) {
+      return next(err);
+    }
+
+    console.error('API Express Error:', err.message || err);
+
+    const knownCode =
+      typeof err?.code === 'string'
+        ? err.code
+        : 'API_INTERNAL_ERROR';
+
+    const persistenceCodes = new Set([
+      'CANVAS_PERSISTENCE_UNAVAILABLE',
+      'AGENT_CANVAS_OWNERSHIP_READ_FAILED',
+      'AGENT_CONVERSATION_LIST_FAILED',
+      'AGENT_CONVERSATION_CREATE_FAILED',
+      'SUPABASE_RUNTIME_CONFIG_MISSING'
+    ]);
+
+    const isPersistence = persistenceCodes.has(knownCode);
+    const status = err.statusCode || err.status || (isPersistence ? 503 : 500);
+
+    return res.status(status).json({
+      success: false,
+      error: {
+        code: isPersistence ? 'CANVAS_PERSISTENCE_UNAVAILABLE' : knownCode,
+        message: isPersistence
+          ? '云端画布数据库不可用或表结构未初始化'
+          : (err.message || 'API 服务处理请求失败')
+      }
     });
   });
 
   // Vite middleware for development
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production' && process.env.DISABLE_VITE !== 'true') {
     const vite = await createViteServer({
       server: { 
         middlewareMode: true,
@@ -1854,8 +1936,12 @@ Output ONLY the finalized premium English prompt for generating a photorealistic
   });
   
   // Set long timeout for VectorEngine/Proxy requests
-  server.timeout = 300000;
-  server.keepAliveTimeout = 300000;
+  server.timeout = 360000;
+  server.headersTimeout = 365000;
+  server.keepAliveTimeout = 360000;
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error("Fatal error starting server:", err);
+  process.exit(1);
+});

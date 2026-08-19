@@ -29,7 +29,7 @@ export const fetchProfile = async () => {
     employee_id: profileData?.employee_id || defaultEmpId,
     username: profileData?.username || profileData?.employee_id || defaultEmpId,
     nickname: profileData?.nickname || profileData?.username || defaultEmpId,
-    role: profileData?.role || 'admin',
+    role: profileData?.role || 'user',
     dept_id: profileData?.dept_id || 'dept-1',
     quota_limit: profileData?.quota_limit ?? 100000,
     quota_used: profileData?.quota_used ?? 0,
@@ -258,4 +258,3 @@ export default function Profile() {
     </motion.div>
   );
 }
-

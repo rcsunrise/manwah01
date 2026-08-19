@@ -11,12 +11,12 @@ const serverServiceKey = typeof process !== 'undefined' ? (process.env.SUPABASE_
 function createMockSupabaseClient() {
   const demoUser = {
     id: 'demo-user-001',
-    email: 'admin@manwah.com',
-    user_metadata: { name: '敏华体验专家', role: 'admin' },
-    role: 'admin'
+    email: 'demo@manwah.com',
+    user_metadata: { name: '敏华体验用户', role: 'user' },
+    role: 'user'
   };
   const demoSession = {
-    access_token: 'demo-token-123',
+    access_token: 'local-mock-session',
     token_type: 'bearer',
     user: demoUser
   };
@@ -56,7 +56,7 @@ function createMockSupabaseClient() {
     }
 
     if (tableName === 'profiles') {
-      const p = { id: 'demo-user-001', name: '敏华体验专家', dept_id: 'dept-1', quota_limit: 100000, quota_used: 1200, role: 'admin' };
+      const p = { id: 'demo-user-001', name: '敏华体验用户', dept_id: 'dept-1', quota_limit: 100000, quota_used: 1200, role: 'user' };
       return isSingle ? p : [p];
     }
     if (tableName === 'departments') {
@@ -64,7 +64,7 @@ function createMockSupabaseClient() {
       return isSingle ? d : [d];
     }
     if (tableName === 'department_configs') {
-      const c = { api_key: safeProcessEnv.GEMINI_API_KEY || '', api_base_url: 'https://generativelanguage.googleapis.com/v1beta', dept_name: '全站系统', routing_mode: 'google' };
+      const c = { api_key: '', api_base_url: 'https://generativelanguage.googleapis.com/v1beta', dept_name: '全站系统', routing_mode: 'google' };
       return isSingle ? c : [c];
     }
     return isSingle ? null : [];
@@ -74,12 +74,14 @@ function createMockSupabaseClient() {
     let isSingle = false;
     let operation = 'select';
     let payloadData: any = null;
-    let eqFilter: { field: string; value: any } | null = null;
+    const eqFilters: Array<{ field: string; value: any }> = [];
     let orFilterStr: string | null = null;
 
     const builder: any = {
       select: () => {
-        operation = 'select';
+        // Supabase supports mutation().select(); selecting the representation
+        // must not turn the pending mutation back into a read operation.
+        if (operation === 'select') operation = 'select';
         return builder;
       },
       insert: (records: any) => {
@@ -102,7 +104,7 @@ function createMockSupabaseClient() {
         return builder;
       },
       eq: (field: string, value: any) => {
-        eqFilter = { field, value };
+        eqFilters.push({ field, value });
         return builder;
       },
       or: (clause: string) => {
@@ -136,7 +138,9 @@ function createMockSupabaseClient() {
           if (operation === 'insert' || operation === 'upsert') {
             const newItems = Array.isArray(payloadData) ? payloadData : [payloadData];
             newItems.forEach(item => {
-              const idx = currentStore.findIndex((x: any) => x.id === item.id || (eqFilter && x[eqFilter.field] === eqFilter.value));
+              const idx = currentStore.findIndex((x: any) => x.id === item.id || (
+                eqFilters.length > 0 && eqFilters.every(filter => x[filter.field] === filter.value)
+              ));
               if (idx >= 0) {
                 currentStore[idx] = { ...currentStore[idx], ...item, updated_at: new Date().toISOString() };
               } else {
@@ -150,7 +154,7 @@ function createMockSupabaseClient() {
 
           if (operation === 'update') {
             currentStore = currentStore.map((item: any) => {
-              if (eqFilter && item[eqFilter.field] === eqFilter.value) {
+              if (eqFilters.length === 0 || eqFilters.every(filter => item[filter.field] === filter.value)) {
                 return { ...item, ...payloadData, updated_at: new Date().toISOString() };
               }
               return item;
@@ -160,8 +164,8 @@ function createMockSupabaseClient() {
           }
 
           if (operation === 'delete') {
-            if (eqFilter) {
-              currentStore = currentStore.filter((item: any) => item[eqFilter!.field] !== eqFilter!.value);
+            if (eqFilters.length > 0) {
+              currentStore = currentStore.filter((item: any) => !eqFilters.every(filter => item[filter.field] === filter.value));
             } else {
               currentStore = [];
             }
@@ -171,8 +175,8 @@ function createMockSupabaseClient() {
 
           // Select query
           let filtered = currentStore;
-          if (eqFilter) {
-            filtered = currentStore.filter((item: any) => item[eqFilter!.field] === eqFilter!.value);
+          if (eqFilters.length > 0) {
+            filtered = currentStore.filter((item: any) => eqFilters.every(filter => item[filter.field] === filter.value));
           } else if (orFilterStr) {
             const conditions = orFilterStr.split(',').map(s => s.trim().split('.eq.'));
             filtered = currentStore.filter((item: any) => {
@@ -185,7 +189,13 @@ function createMockSupabaseClient() {
             });
           }
 
-          const result = isSingle ? (filtered[0] || getTableDefaultData(tableName, true)) : filtered;
+          // A filtered maybeSingle/single query must not fall back to an
+          // unrelated first row. Real Supabase returns null when no record
+          // matches the filter.
+          const hasFilter = Boolean(eqFilters.length > 0 || orFilterStr);
+          const result = isSingle
+            ? (filtered[0] || (hasFilter ? null : getTableDefaultData(tableName, true)))
+            : filtered;
           resolve({ data: result, error: null, count: Array.isArray(result) ? result.length : (result ? 1 : 0) });
         } catch (e) {
           reject(e);

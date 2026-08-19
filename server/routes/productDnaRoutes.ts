@@ -1,26 +1,14 @@
 import { Router, Response } from 'express';
 import { supabaseAdmin } from '../../src/lib/supabase';
 import { AuthenticatedRequest, AppError } from '../types';
-import { authenticateToken } from '../middleware/auth';
+import { optionalAuthenticateToken } from '../middleware/auth';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
 const router = Router();
 
-function requireStrictAuth(req: AuthenticatedRequest, res: Response, next: any) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.status(401).json({
-      success: false,
-      error: { message: 'Authentication token required.', code: 'UNAUTHORIZED' }
-    });
-  }
-  next();
-}
-
-router.use(requireStrictAuth);
-router.use(authenticateToken as any);
+router.use(optionalAuthenticateToken as any);
 
 const SUPABASE_STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'creative-canvas-assets';
 
@@ -274,7 +262,7 @@ router.post(['/', '/product-dnas'], async (req: AuthenticatedRequest, res: Respo
 // ----------------------------------------------------------------------
 // 2. GET /api/product-dnas/:dnaId - Read Product DNA & Current Version
 // ----------------------------------------------------------------------
-router.get(['/:dnaId', '/product-dnas/:dnaId'], async (req: AuthenticatedRequest, res: Response) => {
+router.get(['/:dnaId', '/product-dnas/:dnaId'], async (req: AuthenticatedRequest, res: Response, next: any) => {
   try {
     const dnaId = String(req.params.dnaId);
 
@@ -299,6 +287,9 @@ router.get(['/:dnaId', '/product-dnas/:dnaId'], async (req: AuthenticatedRequest
     }
 
     if (!dna) {
+      if (req.baseUrl === '/api' && !req.path.startsWith('/product-dnas/')) {
+        return next();
+      }
       return res.status(404).json({
         success: false,
         error: { message: `Product DNA '${dnaId}' not found.`, code: 'PRODUCT_DNA_NOT_FOUND' }

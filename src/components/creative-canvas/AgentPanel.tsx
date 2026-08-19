@@ -29,11 +29,13 @@ import {
   ImagePlus,
   RotateCcw,
   Layers,
-  ShieldAlert
+  ShieldAlert,
+  Eye
 } from 'lucide-react';
-import { AgentMessage, GenerationBatch, SceneQueueItem } from '../../types/creativeCanvas';
+import { AgentMessage, GenerationBatch, SceneQueueItem, AgentConversationRecord } from '../../types/creativeCanvas';
 import { ProductVisualDNA, AgentRun } from '../../types';
 import { CopyWorkspacePanel } from './CopyWorkspacePanel';
+import { TypographyWorkspacePanel } from './TypographyWorkspacePanel';
 
 interface AgentPanelProps {
   messages: AgentMessage[];
@@ -53,6 +55,10 @@ interface AgentPanelProps {
   selectedSceneIndex: number | null;
   onGenerateNineGridPlan: () => void;
   onReplanSingleScene: (screenIndex: number) => void;
+  planAgentModel?: string;
+  setPlanAgentModel?: (model: string) => void;
+  planReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  setPlanReasoningEffort?: (effort: 'minimal' | 'low' | 'medium' | 'high') => void;
 
   // C3A Props
   generatingScenes?: Set<number>;
@@ -62,6 +68,7 @@ interface AgentPanelProps {
   selectedResolution?: '1K' | '2K' | '4K';
   setSelectedResolution?: (r: '1K' | '2K' | '4K') => void;
   onGenerateSceneImage?: (screenIndex: number, reviewFeedback?: string) => void;
+  onPreviewGptImage?: () => void;
   onApproveSceneImage?: (screenIndex: number) => void;
   onRejectSceneImage?: (screenIndex: number, feedback: string) => void;
 
@@ -85,6 +92,16 @@ interface AgentPanelProps {
   projectId?: string;
   canvasId?: string;
   assetVersionId?: string;
+
+  // G0-1 Agent Chat & Conversation Persistence Props
+  currentConversation?: AgentConversationRecord | null;
+  conversationsList?: AgentConversationRecord[];
+  isStreaming?: boolean;
+  streamError?: { code: string; message: string } | null;
+  onStopGenerating?: () => void;
+  onRetryMessage?: () => void;
+  onCreateNewConversation?: () => void;
+  onSelectConversation?: (convId: string) => void;
 }
 
 export interface EngineConfigSelectorProps {
@@ -92,13 +109,15 @@ export interface EngineConfigSelectorProps {
   setSelectedModel: (m: string) => void;
   selectedResolution: '1K' | '2K' | '4K';
   setSelectedResolution: (r: '1K' | '2K' | '4K') => void;
+  onPreviewGptImage?: () => void;
 }
 
 export const EngineConfigSelector: React.FC<EngineConfigSelectorProps> = ({
   selectedModel,
   setSelectedModel,
   selectedResolution,
-  setSelectedResolution
+  setSelectedResolution,
+  onPreviewGptImage
 }) => {
   const models = [
     {
@@ -128,6 +147,13 @@ export const EngineConfigSelector: React.FC<EngineConfigSelectorProps> = ({
       title: 'GPT',
       subtitle: 'image-2',
       activeColor: 'bg-[#2C2622] text-white border-[#2C2622] shadow-md'
+    },
+    {
+      id: 'openai/gpt-image-2-all',
+      icon: '🧩',
+      title: 'GPT 多图',
+      subtitle: 'image-2-all',
+      activeColor: 'bg-[#2C2622] text-white border-[#2C2622] shadow-md'
     }
   ];
 
@@ -138,11 +164,22 @@ export const EngineConfigSelector: React.FC<EngineConfigSelectorProps> = ({
           <Sliders className="w-3.5 h-3.5 text-[#B28C5A]" />
           渲染引擎与精度档位
         </span>
+        {selectedModel.includes('gpt-image') && onPreviewGptImage && (
+          <button
+            type="button"
+            onClick={onPreviewGptImage}
+            className="text-[10px] font-bold text-[#8C6F43] bg-[#B28C5A]/15 hover:bg-[#B28C5A]/25 px-2 py-0.5 rounded-lg border border-[#B28C5A]/40 flex items-center gap-1 transition-colors shadow-xs"
+            title="预检并确认 gpt-image-2 参考原图与参数"
+          >
+            <Eye className="w-3 h-3 text-[#B28C5A]" />
+            <span>原图预检</span>
+          </button>
+        )}
       </div>
 
       {/* Models Grid */}
       <div className="space-y-1">
-        <div className="grid grid-cols-4 gap-1.5">
+        <div className="grid grid-cols-5 gap-1.5">
           {models.map(m => {
             const isSelected =
               selectedModel === m.id ||
@@ -206,6 +243,19 @@ export const EngineConfigSelector: React.FC<EngineConfigSelectorProps> = ({
   );
 };
 
+const getCssAspectRatio = (ratioStr?: string): string => {
+  if (!ratioStr || ratioStr === 'Auto' || ratioStr === 'Custom') return '3/4';
+  const parts = String(ratioStr).split(':');
+  if (parts.length === 2) {
+    const w = parseFloat(parts[0]);
+    const h = parseFloat(parts[1]);
+    if (!isNaN(w) && !isNaN(h) && h > 0) {
+      return `${w}/${h}`;
+    }
+  }
+  return '3/4';
+};
+
 export const AgentPanel: React.FC<AgentPanelProps> = ({
   messages,
   uploadState,
@@ -222,6 +272,10 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
   selectedSceneIndex,
   onGenerateNineGridPlan,
   onReplanSingleScene,
+  planAgentModel = 'gemini-2.5-flash',
+  setPlanAgentModel,
+  planReasoningEffort = 'medium',
+  setPlanReasoningEffort,
   generatingScenes,
   nodes = [],
   selectedModel,
@@ -229,6 +283,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
   selectedResolution,
   setSelectedResolution,
   onGenerateSceneImage,
+  onPreviewGptImage,
   onApproveSceneImage,
   onRejectSceneImage,
   batchState,
@@ -247,7 +302,15 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
   onSelectDnaVersion,
   projectId,
   canvasId,
-  assetVersionId
+  assetVersionId,
+  currentConversation,
+  conversationsList = [],
+  isStreaming = false,
+  streamError,
+  onStopGenerating,
+  onRetryMessage,
+  onCreateNewConversation,
+  onSelectConversation
 }) => {
   const [activeTab, setActiveTab] = useState<'scene' | 'copy' | 'typography' | 'version'>('scene');
   const [inputValue, setInputValue] = useState('');
@@ -336,8 +399,33 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
             </div>
           </div>
         </div>
-        <div className="text-[10px] bg-[#F9F5EF] text-[#B28C5A] px-2.5 py-1 rounded-full font-bold border border-[#E5E0D8]/60">
-          阶段 C2
+        <div className="flex items-center gap-2">
+          {conversationsList.length > 1 && (
+            <select
+              value={currentConversation?.id || ''}
+              onChange={(e) => onSelectConversation?.(e.target.value)}
+              className="text-[10px] bg-[#FAF8F5] text-stone-700 px-2 py-1 rounded-lg border border-[#E5E0D8] font-mono outline-none max-w-[120px] truncate"
+              title="切换历史会话"
+            >
+              {conversationsList.map(c => (
+                <option key={c.id} value={c.id}>
+                  {c.title || `会话 ${c.id.slice(0, 8)}`}
+                </option>
+              ))}
+            </select>
+          )}
+          {onCreateNewConversation && (
+            <button
+              onClick={onCreateNewConversation}
+              className="text-[10px] bg-[#F9F5EF] text-[#B28C5A] hover:bg-[#B28C5A] hover:text-white px-2.5 py-1 rounded-full font-bold border border-[#E5E0D8]/60 transition-colors"
+              title="开启全新对话"
+            >
+              + 新建会话
+            </button>
+          )}
+          <div className="text-[10px] bg-[#F9F5EF] text-[#B28C5A] px-2.5 py-1 rounded-full font-bold border border-[#E5E0D8]/60">
+            G0-1 智能体
+          </div>
         </div>
       </div>
 
@@ -453,18 +541,13 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
 
         {/* Typography Tab Content */}
         {activeTab === 'typography' && (
-          <div className="p-6 bg-white rounded-2xl border border-[#E5E0D8] text-center space-y-3 my-4">
-            <div className="w-12 h-12 rounded-2xl bg-[#F9F5EF] text-[#B28C5A] flex items-center justify-center mx-auto border border-[#E5E0D8]">
-              <Layers className="w-6 h-6" />
-            </div>
-            <h3 className="font-serif font-bold text-sm text-[#2C2A29]">真实文字图层与排版面板</h3>
-            <p className="text-xs text-stone-600 leading-relaxed font-medium">
-              真实文字图层与 Layout Version 将在 C4B-4 阶段接入。
-            </p>
-            <span className="inline-block text-[10px] font-bold text-[#B28C5A] bg-[#F9F5EF] px-3 py-1 rounded-full border border-[#E5E0D8]">
-              C4B-1 无假图层模式
-            </span>
-          </div>
+          <TypographyWorkspacePanel
+            projectId={projectId || 'default-project'}
+            canvasId={canvasId || 'default-canvas'}
+            sceneIndex={selectedSceneIndex || 1}
+            productDnaVersionId={productDnaVersionId}
+            assetVersionId={assetVersionId}
+          />
         )}
 
         {/* Version Tab Content */}
@@ -614,6 +697,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
               setSelectedModel={setModel}
               selectedResolution={resolution}
               setSelectedResolution={setResolution}
+              onPreviewGptImage={onPreviewGptImage}
             />
 
             {/* C3B Primary Entry Button */}
@@ -824,6 +908,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
                   setSelectedModel={setModel}
                   selectedResolution={resolution}
                   setSelectedResolution={setResolution}
+                  onPreviewGptImage={onPreviewGptImage}
                 />
 
                 {/* Image Generation Trigger Button */}
@@ -881,7 +966,10 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
                       )}
                     </div>
 
-                    <div className="relative aspect-[3/4] rounded-lg overflow-hidden border border-[#E5E0D8] max-h-[180px] bg-stone-200">
+                    <div
+                      className="relative rounded-lg overflow-hidden border border-[#E5E0D8] max-h-[220px] bg-stone-200 flex items-center justify-center"
+                      style={{ aspectRatio: getCssAspectRatio(genImgNode.data.aspectRatio as string) }}
+                    >
                       <img
                         src={genImgNode.data.imageUrl as string}
                         alt={`分镜 #${screenIndex} 渲染结果`}
@@ -978,7 +1066,10 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
           </div>
 
           {/* Large Image Preview */}
-          <div className="relative w-full aspect-[3/4] rounded-xl overflow-hidden border border-[#E5E0D8] bg-stone-100 shadow-inner group">
+          <div
+            className="relative w-full rounded-xl overflow-hidden border border-[#E5E0D8] bg-stone-100 shadow-inner group flex items-center justify-center"
+            style={{ aspectRatio: getCssAspectRatio(genImgData.aspectRatio as string) }}
+          >
             <img
               src={genImgData.imageUrl as string}
               alt={genImgData.screenTitle as string}
@@ -1099,6 +1190,28 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
         </div>
       </div>
 
+      {/* Context Snapshot Chips Indicator */}
+      {(selectedSceneIndex || productDnaVersionCode || assetVersionId) && (
+        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[#FAF8F5] rounded-xl border border-[#E5E0D8]/60 text-[10px] text-stone-600">
+          <span className="font-bold text-[#B28C5A]">Context:</span>
+          {selectedSceneIndex && (
+            <span className="bg-white px-1.5 py-0.5 rounded border border-[#E5E0D8] font-mono">
+              屏-{selectedSceneIndex}
+            </span>
+          )}
+          {productDnaVersionCode && (
+            <span className="bg-white px-1.5 py-0.5 rounded border border-[#E5E0D8] font-mono">
+              {productDnaVersionCode}
+            </span>
+          )}
+          {assetVersionId && (
+            <span className="bg-white px-1.5 py-0.5 rounded border border-[#E5E0D8] font-mono">
+              SKU-V
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Messages Area */}
       <div className="space-y-4 py-1">
         {messages.map((msg, index) => (
@@ -1125,7 +1238,29 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
                   : 'bg-white text-[#2C2A29] border border-[#E5E0D8] rounded-tl-none'
               }`}
             >
-              <p className="whitespace-pre-wrap">{msg.text}</p>
+              <p className="whitespace-pre-wrap">
+                {msg.text || (msg.status === 'streaming' ? '思考回复中...' : '')}
+              </p>
+              {msg.status === 'streaming' && (
+                <div className="flex items-center gap-1.5 mt-2 text-[#B28C5A] font-bold text-[10px]">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span>Agent G 正在流式生成...</span>
+                </div>
+              )}
+              {msg.status === 'failed' && (
+                <div className="mt-2 pt-1.5 border-t border-rose-200/60 flex items-center justify-between">
+                  <span className="text-rose-600 font-bold text-[10px]">发送中断 ({msg.error_code || 'ERROR'})</span>
+                  {onRetryMessage && (
+                    <button
+                      type="button"
+                      onClick={onRetryMessage}
+                      className="px-2 py-0.5 bg-rose-100 hover:bg-rose-200 text-rose-800 rounded text-[10px] font-bold transition-colors"
+                    >
+                      重试
+                    </button>
+                  )}
+                </div>
+              )}
               <span
                 className={`block text-[9px] mt-1.5 ${
                   msg.sender === 'user' ? 'text-stone-400 text-right' : 'text-stone-400'
@@ -1256,6 +1391,36 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
               </div>
             </div>
 
+            <div className="grid grid-cols-2 gap-2">
+              <label className="space-y-1">
+                <span className="text-[10px] font-bold text-stone-500">策划模型</span>
+                <select
+                  value={planAgentModel}
+                  onChange={event => setPlanAgentModel?.(event.target.value)}
+                  className="w-full rounded-lg border border-[#E5E0D8] bg-white px-2 py-2 text-[10px] text-[#2C2A29] outline-none focus:border-[#B28C5A]"
+                >
+                  <option value="gpt-5.6-sol">GPT-5.6 Sol（旗舰）</option>
+                  <option value="gpt-5.6-terra" disabled>GPT-5.6 Terra（均衡，待验证）</option>
+                  <option value="gpt-5.6-luna" disabled>GPT-5.6 Luna（批量，待验证）</option>
+                  <option value="gpt-5.5">GPT-5.5</option>
+                  <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                </select>
+              </label>
+              <label className="space-y-1">
+                <span className="text-[10px] font-bold text-stone-500">思考等级</span>
+                <select
+                  value={planReasoningEffort}
+                  onChange={event => setPlanReasoningEffort?.(event.target.value as 'minimal' | 'low' | 'medium' | 'high')}
+                  className="w-full rounded-lg border border-[#E5E0D8] bg-white px-2 py-2 text-[10px] text-[#2C2A29] outline-none focus:border-[#B28C5A]"
+                >
+                  <option value="minimal">极简 (最快)</option>
+                  <option value="low">低 (推荐)</option>
+                  <option value="medium">中 (标准深度)</option>
+                  <option value="high">高 (极深，容易超时)</option>
+                </select>
+              </label>
+            </div>
+
             <button
               onClick={() => onGenerateNineGridPlan()}
               disabled={isPlanGenerating}
@@ -1291,22 +1456,35 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
 
       {/* Fixed Composer Input at Bottom */}
       <div className="p-4 border-t border-[#E5E0D8] bg-white/90 backdrop-blur-md shrink-0">
-        <form onSubmit={handleSend} className="relative flex items-center">
+        <form onSubmit={handleSend} className="relative flex items-center gap-2">
           <input
             type="text"
             value={inputValue}
             onChange={e => setInputValue(e.target.value)}
-            placeholder="描述你希望生成的企划要求或重新策划建议……"
-            className="w-full pl-4 pr-12 py-3 bg-[#F9F5EF]/80 border border-[#E5E0D8] rounded-2xl text-xs text-[#2C2A29] placeholder:text-stone-400 outline-none focus:ring-1 focus:ring-[#B28C5A] focus:border-[#B28C5A] transition-all"
+            disabled={isStreaming}
+            placeholder={isStreaming ? "智能体正在回复中..." : "描述你希望生成的企划要求或重新策划建议……"}
+            className="w-full pl-4 pr-12 py-3 bg-[#F9F5EF]/80 border border-[#E5E0D8] rounded-2xl text-xs text-[#2C2A29] placeholder:text-stone-400 outline-none focus:ring-1 focus:ring-[#B28C5A] focus:border-[#B28C5A] transition-all disabled:opacity-60"
           />
-          <button
-            type="submit"
-            disabled={!inputValue.trim()}
-            className="absolute right-2 p-2 bg-[#B28C5A] hover:bg-[#9E7A4A] disabled:opacity-40 text-white rounded-xl transition-all shadow-sm active:scale-95"
-            title="发送"
-          >
-            <Send className="w-3.5 h-3.5" />
-          </button>
+          {isStreaming ? (
+            <button
+              type="button"
+              onClick={onStopGenerating}
+              className="absolute right-2 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-[10px] font-bold transition-all shadow-sm flex items-center gap-1"
+              title="停止生成"
+            >
+              <Pause className="w-3 h-3" />
+              <span>停止</span>
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={!inputValue.trim()}
+              className="absolute right-2 p-2 bg-[#B28C5A] hover:bg-[#9E7A4A] disabled:opacity-40 text-white rounded-xl transition-all shadow-sm active:scale-95"
+              title="发送"
+            >
+              <Send className="w-3.5 h-3.5" />
+            </button>
+          )}
         </form>
         <div className="mt-2 text-[10px] text-center text-stone-400 flex items-center justify-center gap-1">
           <CheckCircle className="w-3 h-3 text-emerald-500" />

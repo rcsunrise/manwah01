@@ -7,6 +7,19 @@ interface DetailPageCanvasExportProps {
   onExportCanvas: (config: DetailPageCanvasConfig) => Promise<DetailPageExportResult | null>;
 }
 
+const getCssAspectRatio = (ratioStr?: string): string => {
+  if (!ratioStr || ratioStr === 'Auto' || ratioStr === 'Custom') return '3/4';
+  const parts = String(ratioStr).split(':');
+  if (parts.length === 2) {
+    const w = parseFloat(parts[0]);
+    const h = parseFloat(parts[1]);
+    if (!isNaN(w) && !isNaN(h) && h > 0) {
+      return `${w}/${h}`;
+    }
+  }
+  return '3/4';
+};
+
 export const DetailPageCanvasExport: React.FC<DetailPageCanvasExportProps> = ({
   runId,
   onExportCanvas
@@ -294,11 +307,14 @@ export const DetailPageCanvasExport: React.FC<DetailPageCanvasExportProps> = ({
                   key={slice.screenIndex}
                   className="bg-stone-950 border border-stone-800 rounded-xl p-3 flex flex-col justify-between space-y-2 hover:border-amber-500/50 transition group"
                 >
-                  <div className="relative aspect-[3/4] bg-stone-900 rounded-lg overflow-hidden border border-stone-800">
+                  <div
+                    className="relative bg-stone-900 rounded-lg overflow-hidden border border-stone-800 flex items-center justify-center min-h-[140px]"
+                    style={{ aspectRatio: getCssAspectRatio(slice.aspectRatio) }}
+                  >
                     <img
                       src={slice.sliceImageUrl}
                       alt={slice.title}
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-contain"
                     />
                     <div className="absolute top-2 left-2 bg-stone-900/80 text-amber-400 text-[10px] font-bold px-2 py-0.5 rounded border border-amber-500/30">
                       第 {slice.screenIndex} 屏

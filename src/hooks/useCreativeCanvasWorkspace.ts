@@ -1,11 +1,13 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { Node, Edge, useNodesState, useEdgesState } from '@xyflow/react';
 import { CreativeProject, ProductVisualDNA, AgentRun, ImageAttachment } from '../types';
-import { AgentMessage, SceneQueueItem, GenerationBatch, SaveStatus, ViewportState } from '../types/creativeCanvas';
+import { AgentMessage, SceneQueueItem, GenerationBatch, SaveStatus, ViewportState, AgentConversationRecord, AgentChatMessageRecord, AgentContextSnapshot, AgentErrorCode } from '../types/creativeCanvas';
+import { assetQueueManager, QueueStats } from '../services/assetQueueService';
+import { AgentChatService } from '../services/agentChatService';
 import { mapExistingNineGridResultToCanvasNodes } from '../adapters/creativeCanvasNineGridAdapter';
 import { supabase } from '../lib/supabase';
 import { parseJsonResponse, assertSerializableRequestPayload } from '../utils/apiUtils';
-import { generateEditedImage, resolveClientImageToBase64 } from '../services/geminiService';
+import { generateEditedImage, resolveClientImageToBase64, resolveClientImageDetailed } from '../services/geminiService';
 import { canvasService } from '../services/canvasService';
 import { logCanvasDiagnostic } from '../utils/canvasDiagnostic';
 
@@ -112,8 +114,23 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
 
   // Phase C4A-1 states for Canvas Draft & Revision Persistence
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('cloud_loading');
+  const [assetQueueStats, setAssetQueueStats] = useState<QueueStats | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [currentRevisionNumber, setCurrentRevisionNumber] = useState<number>(0);
+
+  useEffect(() => {
+    assetQueueManager.init();
+    return assetQueueManager.subscribe((_, stats) => {
+      setAssetQueueStats(stats);
+      if (stats.uploading > 0 || stats.queued > 0) {
+        setSaveStatus('syncing_assets');
+      } else if (stats.failed > 0) {
+        setSaveStatus('error');
+      } else {
+        setSaveStatus('saved');
+      }
+    });
+  }, []);
 
   const [showSaveVersionModal, setShowSaveVersionModal] = useState<boolean>(false);
   const [showHistoryModal, setShowHistoryModal] = useState<boolean>(false);
@@ -131,6 +148,8 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
 
   // Model & Resolution config for Image Generation
   const [selectedModel, setSelectedModel] = useState<string>('gemini-3.1-flash-image');
+  const [planAgentModel, setPlanAgentModel] = useState<string>('gpt-5.6-sol');
+  const [planReasoningEffort, setPlanReasoningEffort] = useState<'minimal' | 'low' | 'medium' | 'high'>('low');
   const [selectedResolution, setSelectedResolution] = useState<'1K' | '2K' | '4K'>('2K');
 
   // C4B-1 Product DNA Version & Selection Linkage States
@@ -170,11 +189,18 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     fetchDnaVersions();
   }, [fetchDnaVersions]);
 
+  // G0-1: Conversation & Agent Chat States
+  const [currentConversation, setCurrentConversation] = useState<AgentConversationRecord | null>(null);
+  const [conversationsList, setConversationsList] = useState<AgentConversationRecord[]>([]);
+  const [isStreaming, setIsStreaming] = useState<boolean>(false);
+  const [streamError, setStreamError] = useState<{ code: AgentErrorCode; message: string } | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   const [messages, setMessages] = useState<AgentMessage[]>([
     {
       id: 'msg-1',
       sender: 'agent',
-      text: '你好！我是视觉企划智能体。请上传产品主角图，我将自动提取造型、色彩、材质与结构 DNA 并同步至左侧画布。',
+      text: '你好！我是家具视觉生产工作流智能体 Agent G。请上传产品主角图，我将自动提取造型、色彩、材质与结构 DNA 并同步至左侧画布。',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     }
   ]);
@@ -229,6 +255,262 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
       }
     ]);
   }, []);
+
+  // G0-1: Conversation initialization and load
+  const loadOrInitConversation = useCallback(async (projId: string, canvId: string) => {
+    try {
+      const list = await AgentChatService.listConversations(canvId, projId);
+      setConversationsList(list);
+
+      let conv = list.find(c => c.status === 'active');
+      if (!conv) {
+        conv = await AgentChatService.createConversation(projId, canvId);
+        setConversationsList(prev => [conv!, ...prev.filter(x => x.id !== conv!.id)]);
+      }
+      setCurrentConversation(conv);
+
+      const historyMsgs = await AgentChatService.loadMessages(conv.id);
+      if (historyMsgs && historyMsgs.length > 0) {
+        const mappedMsgs: AgentMessage[] = historyMsgs.map(m => ({
+          id: m.id,
+          sender: m.role === 'user' ? 'user' : 'agent',
+          text: typeof m.content === 'object' && m.content.text ? m.content.text : String(m.content),
+          timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          status: m.status as any,
+          error_code: m.error_code as any
+        }));
+        setMessages(mappedMsgs);
+      }
+    } catch (err) {
+      console.warn('Failed to load agent conversation:', err);
+    }
+  }, []);
+
+  // G0-1: Streamed message sending
+  const handleSendMessageStream = useCallback(async (textText: string) => {
+    if (!textText.trim() || isStreaming) return;
+
+    const targetProjectId = activeProjectRef.current?.id || workspaceIdParam || 'latest';
+    const targetCanvasId = `canvas_${targetProjectId}`;
+
+    let conv = currentConversation;
+    if (!conv) {
+      try {
+        conv = await AgentChatService.createConversation(targetProjectId, targetCanvasId);
+        setCurrentConversation(conv);
+        setConversationsList(prev => [conv!, ...prev]);
+      } catch (e) {
+        console.error('Failed to auto-create conversation:', e);
+        return;
+      }
+    }
+
+    const selectedNode = nodes.find(n => n.id === selectedNodeId);
+    const activeAssetVersionId = (selectedNode?.data?.assetVersionId as string) || null;
+
+    const contextSnapshot: AgentContextSnapshot = {
+      projectId: targetProjectId,
+      canvasId: targetCanvasId,
+      activeSceneKey: selectedSceneIndex ? `scene-0${selectedSceneIndex}` : undefined,
+      selectedNodeIds: selectedNodeId ? [selectedNodeId] : undefined,
+      productDnaVersionId: productDnaVersionId || null,
+      assetVersionId: activeAssetVersionId,
+      copyVersionId: null,
+      typographySpecId: null
+    };
+
+    const userMsgId = `user-msg-${Date.now()}`;
+    const assistantMsgId = `assistant-msg-${Date.now()}`;
+    const timestampStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    const userMessage: AgentMessage = {
+      id: userMsgId,
+      sender: 'user',
+      text: textText.trim(),
+      timestamp: timestampStr
+    };
+
+    const pendingAssistantMsg: AgentMessage = {
+      id: assistantMsgId,
+      sender: 'agent',
+      text: '',
+      timestamp: timestampStr,
+      status: 'streaming' as any
+    };
+
+    setMessages(prev => [...prev, userMessage, pendingAssistantMsg]);
+    setIsStreaming(true);
+    setStreamError(null);
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    let accumulatedText = '';
+
+    await AgentChatService.sendMessageStream({
+      conversationId: conv.id,
+      message: textText.trim(),
+      contextSnapshot,
+      abortController: controller,
+      onDelta: (delta) => {
+        accumulatedText += delta;
+        setMessages(prev => prev.map(m => {
+          if (m.id === assistantMsgId) {
+            return { ...m, text: accumulatedText };
+          }
+          return m;
+        }));
+      },
+      onComplete: (completedRecord) => {
+        setIsStreaming(false);
+        abortControllerRef.current = null;
+        setMessages(prev => prev.map(m => {
+          if (m.id === assistantMsgId) {
+            return {
+              ...m,
+              id: completedRecord.id,
+              text: (completedRecord.content && completedRecord.content.text) || accumulatedText,
+              status: 'completed' as any
+            };
+          }
+          return m;
+        }));
+      },
+      onError: (err) => {
+        setIsStreaming(false);
+        abortControllerRef.current = null;
+        setStreamError(err);
+        setMessages(prev => prev.map(m => {
+          if (m.id === assistantMsgId) {
+            return {
+              ...m,
+              status: 'failed' as any,
+              error_code: err.code as any,
+              text: accumulatedText ? `${accumulatedText}\n\n[回答中断: ${err.message}]` : `[发送失败: ${err.message}]`
+            };
+          }
+          return m;
+        }));
+      }
+    });
+  }, [currentConversation, workspaceIdParam, isStreaming, selectedSceneIndex, selectedNodeId, productDnaVersionId, nodes]);
+
+  const handleStopGenerating = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsStreaming(false);
+  }, []);
+
+  const handleRetryMessage = useCallback(async () => {
+    if (!currentConversation || isStreaming) return;
+
+    setIsStreaming(true);
+    setStreamError(null);
+
+    const assistantMsgId = `assistant-retry-${Date.now()}`;
+    const timestampStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    setMessages(prev => [
+      ...prev,
+      {
+        id: assistantMsgId,
+        sender: 'agent',
+        text: '',
+        timestamp: timestampStr,
+        status: 'streaming' as any
+      }
+    ]);
+
+    let accumulatedText = '';
+
+    await AgentChatService.retryMessage({
+      conversationId: currentConversation.id,
+      onDelta: (delta) => {
+        accumulatedText += delta;
+        setMessages(prev => prev.map(m => {
+          if (m.id === assistantMsgId) {
+            return { ...m, text: accumulatedText };
+          }
+          return m;
+        }));
+      },
+      onComplete: (record) => {
+        setIsStreaming(false);
+        setMessages(prev => prev.map(m => {
+          if (m.id === assistantMsgId) {
+            return {
+              ...m,
+              id: record.id,
+              text: (record.content && record.content.text) || accumulatedText,
+              status: 'completed' as any
+            };
+          }
+          return m;
+        }));
+      },
+      onError: (err) => {
+        setIsStreaming(false);
+        setStreamError(err);
+        setMessages(prev => prev.map(m => {
+          if (m.id === assistantMsgId) {
+            return {
+              ...m,
+              status: 'failed' as any,
+              error_code: err.code as any,
+              text: accumulatedText ? `${accumulatedText}\n\n[重试失败: ${err.message}]` : `[重试失败: ${err.message}]`
+            };
+          }
+          return m;
+        }));
+      }
+    });
+  }, [currentConversation, isStreaming]);
+
+  const handleCreateNewConversation = useCallback(async () => {
+    const targetProjectId = activeProjectRef.current?.id || workspaceIdParam || 'latest';
+    const targetCanvasId = `canvas_${targetProjectId}`;
+
+    try {
+      const conv = await AgentChatService.createConversation(targetProjectId, targetCanvasId);
+      setCurrentConversation(conv);
+      setConversationsList(prev => [conv, ...prev.filter(x => x.id !== conv.id)]);
+
+      const defaultWelcomeMessage: AgentMessage = {
+        id: `msg-${Date.now()}-welcome`,
+        sender: 'agent',
+        text: '新会话已开启！我是家具视觉生产工作流智能体 Agent G。有什么关于场景企划、DNA 或排版契约的问题可以随时问我。',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+      setMessages([defaultWelcomeMessage]);
+    } catch (e) {
+      console.error('Failed to create new conversation:', e);
+    }
+  }, [workspaceIdParam]);
+
+  const handleSelectConversation = useCallback(async (convId: string) => {
+    const conv = conversationsList.find(c => c.id === convId);
+    if (!conv) return;
+
+    setCurrentConversation(conv);
+    try {
+      const historyMsgs = await AgentChatService.loadMessages(convId);
+      if (historyMsgs && historyMsgs.length > 0) {
+        const mappedMsgs: AgentMessage[] = historyMsgs.map(m => ({
+          id: m.id,
+          sender: m.role === 'user' ? 'user' : 'agent',
+          text: typeof m.content === 'object' && m.content.text ? m.content.text : String(m.content),
+          timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          status: m.status as any,
+          error_code: m.error_code as any
+        }));
+        setMessages(mappedMsgs);
+      }
+    } catch (e) {
+      console.error('Failed to select conversation:', e);
+    }
+  }, [conversationsList]);
 
   // Ensure an active project exists or create one
   const getOrCreateProject = async (): Promise<CreativeProject | null> => {
@@ -542,7 +824,11 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     isPlanGeneratingRef.current = true;
     setIsPlanGenerating(true);
     setPlanError(null);
-    addAgentMessage('正在使用原程序九屏策划能力与统一 Gemini 模型路由生成 9 屏企划方案...');
+    addAgentMessage(
+      planAgentModel.startsWith('gpt-5')
+        ? `正在使用 ${planAgentModel} Responses 与结构化输出生成 9 屏企划方案...`
+        : '正在使用原程序九屏策划能力与统一 Gemini 模型路由生成 9 屏企划方案...'
+    );
 
     try {
       const authHeaders = await getAuthHeaders();
@@ -570,19 +856,47 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
       }
 
       const cleanPromptHint = typeof promptHint === 'string' ? promptHint : '';
-      const planPayload = { promptHint: cleanPromptHint };
-      assertSerializableRequestPayload(planPayload, 'planPayload');
+      let previousResponseId: string | undefined;
+      let genData: {
+        success?: boolean;
+        incomplete?: boolean;
+        continuationRequired?: boolean;
+        responseId?: string;
+        incompleteReason?: string;
+        agentRun?: AgentRun;
+        error?: string;
+        message?: string;
+      } = {};
 
-      const genRes = await fetch(`/api/agent/${currentRunId}/generate-plan`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...authHeaders
-        },
-        body: JSON.stringify(planPayload)
-      });
+      for (let continuationAttempt = 0; continuationAttempt < 3; continuationAttempt += 1) {
+        const planPayload = {
+          promptHint: cleanPromptHint,
+          agentModel: planAgentModel,
+          reasoningEffort: planReasoningEffort,
+          ...(previousResponseId ? { previousResponseId } : {})
+        };
+        assertSerializableRequestPayload(planPayload, 'planPayload');
 
-      const genData = await parseJsonResponse<{ success?: boolean; agentRun?: AgentRun; error?: string; message?: string }>(genRes);
+        const genRes = await fetch(`/api/agent/${currentRunId}/generate-plan`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders
+          },
+          body: JSON.stringify(planPayload)
+        });
+        genData = await parseJsonResponse(genRes);
+        if (!genData.incomplete || !genData.continuationRequired) break;
+        if (!genData.responseId) {
+          throw new Error('模型返回 incomplete，但缺少可续接的 responseId');
+        }
+        previousResponseId = genData.responseId;
+        addAgentMessage(`模型输出因 ${genData.incompleteReason || '输出上限'} 暂停，正在自动续接（${continuationAttempt + 1}/2）...`);
+      }
+
+      if (genData.incomplete) {
+        throw new Error('模型连续输出不完整，请降低思考等级或稍后重试。');
+      }
 
       if (genData.success && genData.agentRun) {
         const run: AgentRun = genData.agentRun;
@@ -629,7 +943,10 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
         addAgentMessage(`❌ 九屏企划生成异常：${errStr}`);
       }
     } catch (err: any) {
-      const errStr = err?.message || '网络请求或引擎解析异常';
+      let errStr = err?.message || '网络请求或引擎解析异常';
+      if (errStr.includes('504') || errStr.includes('超时') || errStr.toLowerCase().includes('gateway time')) {
+        errStr = `${errStr}（💡 提示：旗舰模型深度思考耗时较长触发网关超时。建议将上方【思考等级】切换为“低”或“中”后重新提交）`;
+      }
       setPlanError(errStr);
       setIsPlanGenerating(false);
       addAgentMessage(`❌ 九屏企划生成失败：${errStr}`);
@@ -723,6 +1040,12 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
   };
 
   // Phase C3A: Single screen image generation & review
+  const handleGenerateNineGridPlanRef = useRef(handleGenerateNineGridPlan);
+  handleGenerateNineGridPlanRef.current = handleGenerateNineGridPlan;
+
+  const handleReplanSingleSceneRef = useRef(handleReplanSingleScene);
+  handleReplanSingleSceneRef.current = handleReplanSingleScene;
+
   const generatingScenesRef = useRef<Set<number>>(new Set());
 
   const handleApproveSceneImage = (screenIndex: number) => {
@@ -892,12 +1215,16 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
 
     try {
       const targetRaw = rawB64 || uploadedBase64Ref.current || uploadedBase64 || '';
-      let cleanB64 = await resolveClientImageToBase64(targetRaw);
+      let resolvedImg = await resolveClientImageDetailed(targetRaw);
+      let cleanB64 = resolvedImg.base64Data;
+      let detectedMime = resolvedImg.mimeType;
 
       if (!cleanB64) {
         const imgNode = nodes.find(n => n.id === 'img-node-1' || n.type === 'productImageNode' || n.type === 'productImage');
         if (imgNode?.data?.imageUrl) {
-          cleanB64 = await resolveClientImageToBase64(imgNode.data.imageUrl as string);
+          const fallbackRes = await resolveClientImageDetailed(imgNode.data.imageUrl as string);
+          cleanB64 = fallbackRes.base64Data;
+          detectedMime = fallbackRes.mimeType;
         }
       }
 
@@ -945,14 +1272,18 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
       };
       assertSerializableRequestPayload(generatePayload, 'generatePayload');
 
+      const activeMime = detectedMime || 'image/png';
       const imageAttachments: ImageAttachment[] = cleanB64 ? [
         {
           id: `ref-img-${Date.now()}`,
-          previewUrl: cleanB64.startsWith('data:') ? cleanB64 : `data:image/jpeg;base64,${cleanB64}`,
+          previewUrl: cleanB64.startsWith('data:') ? cleanB64 : `data:${activeMime};base64,${cleanB64}`,
           base64Data: cleanB64,
-          mimeType: 'image/jpeg',
+          mimeType: activeMime,
           width: 1024,
-          height: 1024
+          height: 1024,
+          role: 'primary_product',
+          referenceAssetId: 'primary-product',
+          order: 0
         }
       ] : [];
 
@@ -1619,6 +1950,10 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
           data.productDnaVersionId = productDnaVersionId || data.productDnaVersionId;
           data.versions = dnaVersions.length > 0 ? dnaVersions : data.versions;
           data.onSelectDnaVersion = handleSelectDnaVersion;
+          if (!data.dna && activeDna) {
+            data.dna = activeDna;
+            if (data.status === 'idle' || !data.status) data.status = 'completed';
+          }
         } else if (node.id === 'nine-grid-plan-node' || node.type === 'nineGridPlanNode') {
           data.onViewFullPlan = () => {
             setSelectedNodeId('nine-grid-plan-node');
@@ -1667,6 +2002,10 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
           data.onReject = (feedback: string) => handleRejectSceneImage(idx, feedback);
         } else if (node.id === 'img-node-1' || node.type === 'productImageNode') {
           data.onReanalyze = () => handleReanalyze();
+          if (!data.imageUrl && (uploadedImageUrl || uploadedBase64)) {
+            data.imageUrl = uploadedImageUrl || uploadedBase64;
+            if (data.status === 'idle' || !data.status) data.status = 'completed';
+          }
         }
 
         return { ...node, data };
@@ -1683,7 +2022,15 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
       handleRejectSceneImage,
       handleReanalyze,
       handleTriggerBatchMissingModal,
-      batchState
+      handleSelectDnaVersion,
+      batchState,
+      dnaCode,
+      productDnaVersionCode,
+      productDnaVersionId,
+      dnaVersions,
+      activeDna,
+      uploadedImageUrl,
+      uploadedBase64
     ]
   );
 
@@ -1710,6 +2057,59 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
         localKey
       });
 
+      let fetchedProject: CreativeProject | null = null;
+      let fetchedDna: ProductVisualDNA | null = null;
+      let fetchedAssets: any[] = [];
+      let fetchedHeroUrl: string | null = null;
+      let fetchedRun: AgentRun | null = null;
+
+      if (targetProjectId && targetProjectId !== 'new' && targetProjectId !== 'latest') {
+        try {
+          const authHeaders = await getAuthHeaders();
+          const pRes = await fetch(`/api/projects/${targetProjectId}`, { headers: { ...authHeaders } });
+          if (pRes.ok) {
+            const pData = await pRes.json();
+            if (pData.success && pData.project) {
+              fetchedProject = pData.project;
+              fetchedDna = pData.productDna || null;
+              fetchedAssets = pData.assets || [];
+              setActiveProject(fetchedProject);
+              if (fetchedDna) {
+                setActiveDna(fetchedDna);
+                const dnaAny = fetchedDna as any;
+                if (dnaAny.dna_code || dnaAny.dnaCode) setDnaCode(dnaAny.dna_code || dnaAny.dnaCode);
+                if (dnaAny.version_code || dnaAny.versionCode) setProductDnaVersionCode(dnaAny.version_code || dnaAny.versionCode);
+                if (dnaAny.current_version_id || dnaAny.currentVersionId) setProductDnaVersionId(dnaAny.current_version_id || dnaAny.currentVersionId);
+              }
+              if (fetchedAssets.length > 0) {
+                const hero = fetchedAssets.find((a: any) => a.asset_type === 'product_hero') || fetchedAssets[0];
+                const heroUrl = hero?.storage_path || hero?.url || hero?.storage_url;
+                if (heroUrl) {
+                  fetchedHeroUrl = heroUrl;
+                  setUploadedImageUrl(heroUrl);
+                  if (typeof heroUrl === 'string' && heroUrl.startsWith('data:image/')) {
+                    setUploadedBase64(heroUrl);
+                  }
+                  setUploadState('completed');
+                }
+              }
+            }
+          }
+
+          // Check for existing agent runs
+          const rRes = await fetch(`/api/agent-runs?projectId=${targetProjectId}`, { headers: { ...authHeaders } });
+          if (rRes.ok) {
+            const rData = await rRes.json();
+            if (rData.success && rData.agentRuns?.length > 0) {
+              fetchedRun = rData.agentRuns[0];
+              setAgentRun(fetchedRun);
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to load project details for canvas hydration:', e);
+        }
+      }
+
       let serverSuccess = false;
 
       try {
@@ -1720,9 +2120,20 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
           Array.isArray(serverCanvas.nodes_draft || serverCanvas.nodesDraft) &&
           (serverCanvas.nodes_draft || serverCanvas.nodesDraft)!.length > 0
         ) {
-          const loadedNodes = serverCanvas.nodes_draft || serverCanvas.nodesDraft || [];
+          let loadedNodes = serverCanvas.nodes_draft || serverCanvas.nodesDraft || [];
           const loadedEdges = serverCanvas.edges_draft || serverCanvas.edgesDraft || [];
           const loadedViewport = serverCanvas.viewport_draft || serverCanvas.viewportDraft || { x: 0, y: 0, zoom: 1 };
+
+          // If canvas nodes lack image or DNA, enrich from project
+          loadedNodes = loadedNodes.map((n: any) => {
+            if ((n.id === 'img-node-1' || n.type === 'productImageNode') && !n.data?.imageUrl && fetchedHeroUrl) {
+              return { ...n, data: { ...(n.data || {}), imageUrl: fetchedHeroUrl, status: 'completed' } };
+            }
+            if ((n.id === 'dna-node-1' || n.type === 'productDnaNode') && !n.data?.dna && fetchedDna) {
+              return { ...n, data: { ...(n.data || {}), dna: fetchedDna, status: 'completed' } };
+            }
+            return n;
+          });
 
           setNodes(loadedNodes);
           setEdges(loadedEdges);
@@ -1748,7 +2159,14 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
 
           setCurrentRevisionNumber(serverCanvas.current_revision || serverCanvas.currentRevision || 0);
           setLastSavedAt(serverCanvas.last_saved_at || serverCanvas.lastSavedAt || new Date().toISOString());
-          setSaveStatus('cloud_saved');
+          const medium = (serverCanvas as any).storageMedium || 'cloud';
+          if (medium === 'cloud') {
+            setSaveStatus('cloud_saved');
+          } else if (medium === 'memory') {
+            setSaveStatus('memory_only');
+          } else {
+            setSaveStatus('local_saved');
+          }
 
           prevSerializedRef.current = JSON.stringify({
             nodes: loadedNodes,
@@ -1781,7 +2199,7 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
       if (!serverSuccess && isMounted) {
         // Fallback to LocalStorage
         try {
-          const raw = localStorage.getItem(localKey) || (targetProjectId !== 'new' ? localStorage.getItem('manwah_canvas_latest') : null);
+          const raw = localStorage.getItem(localKey) || (targetProjectId !== 'new' && targetProjectId !== 'latest' ? null : localStorage.getItem('manwah_canvas_latest'));
           if (raw) {
             const snapshot = JSON.parse(raw);
             if (snapshot && Array.isArray(snapshot.nodes) && snapshot.nodes.length > 0) {
@@ -1791,7 +2209,7 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
               if (snapshot.uploadedBase64) setUploadedBase64(snapshot.uploadedBase64);
               if (snapshot.uploadState && snapshot.uploadState !== 'uploading' && snapshot.uploadState !== 'analyzing') {
                 setUploadState(snapshot.uploadState);
-              } else if (snapshot.uploadedBase64) {
+              } else if (snapshot.uploadedBase64 || snapshot.uploadedImageUrl) {
                 setUploadState('completed');
               }
               if (snapshot.agentRun) setAgentRun(snapshot.agentRun);
@@ -1821,6 +2239,7 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
 
               hasUserMutationRef.current = false;
               setSaveStatus('local_saved');
+              serverSuccess = true;
 
               logCanvasDiagnostic({
                 projectId: targetProjectId,
@@ -1828,51 +2247,118 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
                 nodesCount: snapshot.nodes.length,
                 source: 'hydrate_from_local_storage_fallback'
               });
-            } else {
-              // Default Canvas Initialization
-              setNodes(initialNodes);
-              setEdges(initialEdges);
-              prevSerializedRef.current = JSON.stringify({
-                nodes: initialNodes,
-                edges: initialEdges,
-                viewport: { x: 0, y: 0, zoom: 1 }
-              });
-              hasUserMutationRef.current = false;
-              setSaveStatus('cloud_saved');
-
-              logCanvasDiagnostic({
-                projectId: targetProjectId,
-                canvasId: targetCanvasId,
-                source: 'default_canvas_initialized_reason',
-                reason: 'server_and_local_both_empty'
-              });
             }
-          } else {
-            // Default Canvas Initialization
-            setNodes(initialNodes);
-            setEdges(initialEdges);
-            prevSerializedRef.current = JSON.stringify({
-              nodes: initialNodes,
-              edges: initialEdges,
-              viewport: { x: 0, y: 0, zoom: 1 }
-            });
-            hasUserMutationRef.current = false;
-            setSaveStatus('cloud_saved');
-
-            logCanvasDiagnostic({
-              projectId: targetProjectId,
-              canvasId: targetCanvasId,
-              source: 'default_canvas_initialized_reason',
-              reason: 'no_local_snapshot'
-            });
           }
         } catch (err: any) {
           console.error('Failed to hydrate canvas workspace state from local:', err);
-          setSaveStatus('save_failed');
         }
       }
 
+      if (!serverSuccess && isMounted) {
+        // Construct initial nodes from fetched project, assets, DNA & agentRun
+        let customNodes: Node[] = [];
+        let customEdges: Edge[] = [];
+
+        const effectiveDna = fetchedDna || activeDna;
+        const effectiveHeroUrl = fetchedHeroUrl || uploadedImageUrl;
+        const effectiveRun = fetchedRun || agentRun;
+
+        const baseWelcome: Node = {
+          id: 'welcome-1',
+          type: 'welcomeNode',
+          position: { x: 100, y: 120 },
+          data: {
+            title: fetchedProject?.name ? `视觉企划画布 - ${fetchedProject.name}` : '视觉企划画布',
+            description: effectiveDna
+              ? '已成功同步产品 DNA 与主角图，点击下方【生成九屏企划】按钮即可启动爆款详情页策划。'
+              : '上传产品图片后，智能体生成的产品 DNA、九屏方案和渲染结果将在这里形成节点。',
+            status: effectiveDna ? '产品 DNA 已同步' : '画布已连接'
+          }
+        };
+        customNodes.push(baseWelcome);
+
+        if (effectiveHeroUrl) {
+          customNodes.push({
+            id: 'img-node-1',
+            type: 'productImageNode',
+            position: { x: 100, y: 320 },
+            data: {
+              imageUrl: effectiveHeroUrl,
+              status: 'completed',
+              title: '产品主角参考图'
+            }
+          });
+        }
+
+        if (effectiveDna) {
+          customNodes.push({
+            id: 'dna-node-1',
+            type: 'productDnaNode',
+            position: { x: 480, y: 150 },
+            data: {
+              dna: effectiveDna,
+              status: 'completed',
+              dnaCode: (effectiveDna as any).dna_code || 'DNA-178229',
+              versionCode: (effectiveDna as any).version_code || 'DNA-V001',
+              onViewFullDna: () => setShowFullDnaDrawer(true)
+            }
+          });
+          if (effectiveHeroUrl) {
+            customEdges.push({
+              id: 'edge-img-dna',
+              source: 'img-node-1',
+              target: 'dna-node-1',
+              sourceHandle: 'source',
+              targetHandle: 'target',
+              label: '分析生成',
+              labelStyle: { fill: '#8C6F43', fontSize: 10, fontWeight: 700 },
+              labelBgStyle: { fill: '#F9F5EF', rx: 4, ry: 4 }
+            });
+          }
+
+          if (effectiveRun?.plan?.screens && Array.isArray(effectiveRun.plan.screens)) {
+            const adapterResult = mapExistingNineGridResultToCanvasNodes(effectiveRun, effectiveDna, {
+              onViewFullPlan: () => {
+                setSelectedNodeId('nine-grid-plan-node');
+                setSelectedSceneIndex(null);
+              },
+              onRegenerateAll: () => handleGenerateNineGridPlanRef.current?.(),
+              onViewSceneDetail: (idx: number) => {
+                setSelectedNodeId(`scene-plan-node-${idx}`);
+                setSelectedSceneIndex(idx);
+              },
+              onReplanScene: (idx: number) => handleReplanSingleSceneRef.current?.(idx)
+            });
+            customNodes = [...customNodes, ...adapterResult.nodes];
+            customEdges = [...customEdges, ...adapterResult.edges];
+          }
+        }
+
+        if (customNodes.length === 1 && !effectiveHeroUrl && !effectiveDna) {
+          customNodes = initialNodes;
+          customEdges = initialEdges;
+        }
+
+        setNodes(customNodes);
+        setEdges(customEdges);
+        prevSerializedRef.current = JSON.stringify({
+          nodes: customNodes,
+          edges: customEdges,
+          viewport: { x: 0, y: 0, zoom: 1 }
+        });
+        hasUserMutationRef.current = false;
+        setSaveStatus('cloud_saved');
+
+        logCanvasDiagnostic({
+          projectId: targetProjectId,
+          canvasId: targetCanvasId,
+          source: 'default_canvas_initialized_with_dna',
+          nodesCount: customNodes.length
+        });
+      }
+
       if (isMounted) {
+        loadOrInitConversation(targetProjectId, targetCanvasId);
         setHydrationState('hydrated');
         setTimeout(() => {
           if (isMounted) {
@@ -1887,7 +2373,7 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     return () => {
       isMounted = false;
     };
-  }, [workspaceIdParam, getStorageKey, setNodes, setEdges]);
+  }, [workspaceIdParam]);
 
   // Helper to serialize nodes strictly for JSON draft
   const getCleanSerializableNodes = useCallback((rawNodeList: Node[]) => {
@@ -2250,6 +2736,17 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     addAgentMessage,
     clearCanvasWorkspace,
 
+    // G0-1 Exports
+    currentConversation,
+    conversationsList,
+    isStreaming,
+    streamError,
+    handleSendMessageStream,
+    handleStopGenerating,
+    handleRetryMessage,
+    handleCreateNewConversation,
+    handleSelectConversation,
+
     // C2 Exports
     agentRun,
     isPlanGenerating,
@@ -2271,8 +2768,14 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
     onSelectDnaVersion: handleSelectDnaVersion,
 
     // C3A Exports
+    uploadedBase64,
+    setUploadedBase64: setUploadedBase64State,
     selectedModel,
     setSelectedModel,
+    planAgentModel,
+    setPlanAgentModel,
+    planReasoningEffort,
+    setPlanReasoningEffort,
     selectedResolution,
     setSelectedResolution,
     generatingScenes: generatingScenesRef.current,
@@ -2305,6 +2808,8 @@ export function useCreativeCanvasWorkspace(workspaceIdParam?: string) {
 
     // C4A-1 Exports
     saveStatus,
+    assetQueueStats,
+    retryAssetUpload: (jobId: string) => assetQueueManager.retryJob(jobId),
     lastSavedAt,
     currentRevisionNumber,
     showSaveVersionModal,

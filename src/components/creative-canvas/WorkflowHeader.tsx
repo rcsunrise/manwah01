@@ -13,6 +13,7 @@ interface WorkflowHeaderProps {
   productDnaVersionId?: string;
   onOpenSaveModal?: () => void;
   onOpenHistoryModal?: () => void;
+  onOpenLayoutEditor?: () => void;
   onNewCanvas?: () => void;
   onViewDnaVersion?: () => void;
 }
@@ -27,6 +28,7 @@ export const WorkflowHeader: React.FC<WorkflowHeaderProps> = ({
   productDnaVersionId,
   onOpenSaveModal,
   onOpenHistoryModal,
+  onOpenLayoutEditor,
   onNewCanvas,
   onViewDnaVersion
 }) => {
@@ -161,6 +163,18 @@ export const WorkflowHeader: React.FC<WorkflowHeaderProps> = ({
             </span>
           )}
         </button>
+
+        {/* Action: Open Long Image Layout Editor Modal */}
+        {onOpenLayoutEditor && (
+          <button
+            onClick={onOpenLayoutEditor}
+            className="px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold transition-all shadow-xs flex items-center gap-1.5"
+            title="九屏混合画幅与长图版面适配 (Manifest 封板)"
+          >
+            <LayoutGrid className="w-3.5 h-3.5 text-amber-700" />
+            <span>长图版面 (Manifest)</span>
+          </button>
+        )}
 
         {/* Action: Save Current Version Modal */}
         <button

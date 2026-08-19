@@ -1,0 +1,150 @@
+[
+  [
+    "auth_smoke_1786519390339_6e150f72",
+    {
+      "paidAuthorizationId": "auth_smoke_1786519390339_6e150f72",
+      "workspaceId": "workspace_user_A",
+      "scope": "single_image_smoke",
+      "maxProviderCalls": 1,
+      "consumedProviderCalls": 1,
+      "remainingProviderCalls": 0,
+      "status": "consumed",
+      "createdAt": "2026-08-12T07:23:10.339Z",
+      "consumedAt": "2026-08-12T07:23:10.341Z"
+    }
+  ],
+  [
+    "auth_smoke_1786519390341_2caf8133",
+    {
+      "paidAuthorizationId": "auth_smoke_1786519390341_2caf8133",
+      "workspaceId": "workspace_user_A",
+      "scope": "single_image_smoke",
+      "maxProviderCalls": 1,
+      "consumedProviderCalls": 0,
+      "remainingProviderCalls": 1,
+      "status": "active",
+      "createdAt": "2026-08-12T07:23:10.341Z"
+    }
+  ],
+  [
+    "auth_smoke_1786519390342_0707f35a",
+    {
+      "paidAuthorizationId": "auth_smoke_1786519390342_0707f35a",
+      "workspaceId": "workspace_user_A",
+      "scope": "single_image_smoke",
+      "maxProviderCalls": 1,
+      "consumedProviderCalls": 0,
+      "remainingProviderCalls": 1,
+      "status": "active",
+      "createdAt": "2026-08-12T07:23:10.342Z"
+    }
+  ],
+  [
+    "auth_smoke_1786519724222_c923eb40",
+    {
+      "paidAuthorizationId": "auth_smoke_1786519724222_c923eb40",
+      "workspaceId": "workspace_user_A",
+      "scope": "single_image_smoke",
+      "maxProviderCalls": 1,
+      "consumedProviderCalls": 1,
+      "remainingProviderCalls": 0,
+      "status": "consumed",
+      "createdAt": "2026-08-12T07:28:44.223Z",
+      "consumedAt": "2026-08-12T07:28:44.224Z"
+    }
+  ],
+  [
+    "auth_smoke_1786519724225_6de453c6",
+    {
+      "paidAuthorizationId": "auth_smoke_1786519724225_6de453c6",
+      "workspaceId": "workspace_user_A",
+      "scope": "single_image_smoke",
+      "maxProviderCalls": 1,
+      "consumedProviderCalls": 0,
+      "remainingProviderCalls": 1,
+      "status": "active",
+      "createdAt": "2026-08-12T07:28:44.225Z"
+    }
+  ],
+  [
+    "auth_smoke_1786519724225_887f1b57",
+    {
+      "paidAuthorizationId": "auth_smoke_1786519724225_887f1b57",
+      "workspaceId": "workspace_user_A",
+      "scope": "single_image_smoke",
+      "maxProviderCalls": 1,
+      "consumedProviderCalls": 0,
+      "remainingProviderCalls": 1,
+      "status": "active",
+      "createdAt": "2026-08-12T07:28:44.225Z"
+    }
+  ],
+  [
+    "USER_APPROVED_G0_2B_R_20260812_001",
+    {
+      "paidAuthorizationId": "USER_APPROVED_G0_2B_R_20260812_001",
+      "workspaceId": "user_workspace_smoke_001",
+      "scope": "single_image_smoke",
+      "maxProviderCalls": 1,
+      "consumedProviderCalls": 1,
+      "remainingProviderCalls": 0,
+      "status": "consumed",
+      "createdAt": "2026-08-12T07:28:52.694Z",
+      "consumedAt": "2026-08-12T07:28:52.696Z"
+    }
+  ],
+  [
+    "auth_smoke_1786523206852_a21a1116",
+    {
+      "paidAuthorizationId": "auth_smoke_1786523206852_a21a1116",
+      "workspaceId": "workspace_user_A",
+      "scope": "single_image_smoke",
+      "maxProviderCalls": 1,
+      "consumedProviderCalls": 1,
+      "remainingProviderCalls": 0,
+      "status": "consumed",
+      "createdAt": "2026-08-12T08:26:46.852Z",
+      "consumedAt": "2026-08-12T08:26:46.854Z"
+    }
+  ],
+  [
+    "auth_smoke_1786523206854_ea65fcc0",
+    {
+      "paidAuthorizationId": "auth_smoke_1786523206854_ea65fcc0",
+      "workspaceId": "workspace_user_A",
+      "scope": "single_image_smoke",
+      "maxProviderCalls": 1,
+      "consumedProviderCalls": 0,
+      "remainingProviderCalls": 1,
+      "status": "active",
+      "createdAt": "2026-08-12T08:26:46.855Z"
+    }
+  ],
+  [
+    "auth_smoke_1786523206855_5888a3cb",
+    {
+      "paidAuthorizationId": "auth_smoke_1786523206855_5888a3cb",
+      "workspaceId": "workspace_user_A",
+      "scope": "single_image_smoke",
+      "maxProviderCalls": 1,
+      "consumedProviderCalls": 0,
+      "remainingProviderCalls": 1,
+      "status": "active",
+      "createdAt": "2026-08-12T08:26:46.855Z"
+    }
+  ],
+  [
+    "USER_APPROVED_G0_2B_R2_20260812_002",
+    {
+      "paidAuthorizationId": "USER_APPROVED_G0_2B_R2_20260812_002",
+      "workspaceId": "user_workspace_smoke_002",
+      "scope": "single_image_smoke",
+      "maxProviderCalls": 1,
+      "consumedProviderCalls": 1,
+      "remainingProviderCalls": 0,
+      "status": "consumed",
+      "createdAt": "2026-08-12T08:27:04.326Z",
+      "consumedAt": "2026-08-12T08:27:04.327Z"
+    }
+  ]
+]

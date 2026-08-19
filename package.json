@@ -9,7 +9,10 @@
     "build": "vite build && esbuild server.ts --bundle --platform=node --target=node22 --outfile=dist/server.cjs --format=cjs --packages=external",
     "lint": "tsc --noEmit",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "verify:baseline-m1": "node scripts/verify_baseline_m1.cjs",
+    "verify:g0-1r": "node scripts/verify_g0_1_runtime.cjs",
+    "smoke:providers": "tsx scripts/providerSmokeTest.ts"
   },
   "dependencies": {
     "@google/genai": "^1.30.0",
@@ -27,6 +30,7 @@
     "react-router-dom": "^7.14.2",
     "recharts": "^3.8.1",
     "sharp": "^0.34.5",
+    "tus-js-client": "^4.3.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

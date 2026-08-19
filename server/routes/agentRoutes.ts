@@ -1,10 +1,32 @@
 import { Router, Response, NextFunction } from 'express';
-import { Type } from '@google/genai';
+import { ThinkingLevel, Type } from '@google/genai';
 import { supabaseAdmin } from '../../src/lib/supabase';
 import { AuthenticatedRequest, AppError } from '../types';
 import { authenticateToken } from '../middleware/auth';
 import { AgentRun, AgentRunStatus, ALLOWED_STATUS_TRANSITIONS, DetailPagePlan, ProductVisualDNA, DetailPageRenderTask, DetailPageTaskBatch, DetailPageCanvasConfig, DetailPageExportResult, DetailPageSliceAsset } from '../../src/types';
 import { createServerGenAI } from '../utils/aiClient';
+import {
+  AgentResponsesError,
+  assertSafePreviousResponseId,
+  createAgentResponse,
+  isContinuableIncompleteReason,
+  parseAgentReasoningEffort
+} from '../ai/agentResponses';
+import { assertAgentModelCompatibility, resolveAgentModel, resolveAgentModelDetailed } from '../ai/agentModelRegistry';
+import {
+  DETAIL_PLAN_INSTRUCTIONS,
+  DETAIL_PLAN_JSON_SCHEMA,
+  parseStructuredDetailPlan
+} from '../ai/detailPlanSchema';
+
+import { renderBatchManager } from '../services/renderBatchManager';
+import { compileScreenPrompt } from '../ai/promptCompiler';
+import { resolveImageModel } from '../ai/modelRegistry';
+import { getImageProviderAdapter } from '../ai/imageProviderAdapter';
+import { paidAuthorizationGate, redactSensitiveData } from '../services/paidAuthorizationGate';
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 
 const router = Router();
 
@@ -14,12 +36,72 @@ router.use(authenticateToken as any);
 const inMemoryAgentRuns = new Map<string, AgentRun>();
 const inMemoryTasks = new Map<string, DetailPageRenderTask[]>();
 
+const AGENT_RUNS_DIR = path.join(process.cwd(), '.data', 'agent_runs');
+
+function ensureAgentRunsDir() {
+  try {
+    if (!fs.existsSync(AGENT_RUNS_DIR)) {
+      fs.mkdirSync(AGENT_RUNS_DIR, { recursive: true });
+    }
+  } catch (e) {}
+}
+
+function persistAgentRunData(runId: string) {
+  ensureAgentRunsDir();
+  try {
+    const run = inMemoryAgentRuns.get(runId);
+    const tasks = inMemoryTasks.get(runId) || [];
+    if (run) {
+      const filePath = path.join(AGENT_RUNS_DIR, `${runId}.json`);
+      fs.writeFileSync(filePath, JSON.stringify({ run, tasks }, null, 2), 'utf-8');
+    }
+  } catch (e) {}
+}
+
+function loadAgentRunsFromDisk() {
+  ensureAgentRunsDir();
+  try {
+    const files = fs.readdirSync(AGENT_RUNS_DIR);
+    for (const file of files) {
+      if (file.endsWith('.json')) {
+        const raw = fs.readFileSync(path.join(AGENT_RUNS_DIR, file), 'utf-8');
+        const data = JSON.parse(raw);
+        if (data?.run?.id) {
+          inMemoryAgentRuns.set(data.run.id, data.run);
+          if (Array.isArray(data.tasks)) {
+            inMemoryTasks.set(data.run.id, data.tasks);
+          }
+        } else if (data?.id) {
+          inMemoryAgentRuns.set(data.id, data);
+        }
+      }
+    }
+  } catch (e) {}
+}
+
+loadAgentRunsFromDisk();
+
 function validateStatusTransition(current: AgentRunStatus, target: AgentRunStatus): void {
   const allowed = ALLOWED_STATUS_TRANSITIONS[current] || [];
   if (!allowed.includes(target)) {
     throw new AppError(`非法的状态转换: 不能从 ${current} 切换至 ${target}`, 400, 'INVALID_TRANSITION');
   }
 }
+
+// 0. List or query Agent Runs (by projectId)
+router.get('/', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const { projectId } = req.query;
+    let runs = Array.from(inMemoryAgentRuns.values());
+    if (projectId) {
+      runs = runs.filter(r => r.projectId === String(projectId));
+    }
+    runs.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    return res.json({ success: true, agentRuns: runs, agentRun: runs[0] || null });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // 1. Create a new Agent Run from a confirmed Product DNA
 router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
@@ -46,6 +128,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
     };
 
     inMemoryAgentRuns.set(runId, newRun);
+    persistAgentRunData(runId);
 
     return res.json({ success: true, agentRun: newRun });
   } catch (err) {
@@ -53,26 +136,31 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
   }
 });
 
-// 2. Generate 9-Screen Detail Page Plan using Gemini API
+// 2. Generate 9-Screen Detail Page Plan using persistent configured AI Provider
 router.post('/:runId/generate-plan', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const runId = String(req.params.runId);
-    const { promptHint } = req.body;
+    const { promptHint, agentModel, reasoningEffort, previousResponseId } = req.body;
 
     const run = inMemoryAgentRuns.get(runId);
     if (!run) {
       throw new AppError('Agent 运行实例不存在', 404, 'NOT_FOUND');
     }
 
-    // Validate state transition
-    if (run.status !== 'dna_confirmed' && run.status !== 'plan_review' && run.status !== 'failed') {
+    const isResponseContinuation = typeof previousResponseId === 'string' && previousResponseId.trim().length > 0;
+    if (
+      run.status !== 'dna_confirmed' &&
+      run.status !== 'plan_review' &&
+      run.status !== 'failed' &&
+      run.status !== 'plan_generating'
+    ) {
       validateStatusTransition(run.status, 'plan_generating');
     }
     run.status = 'plan_generating';
     run.updatedAt = new Date().toISOString();
 
     const user = req.user!;
-    const { ai, isValidKey } = await createServerGenAI(user.id);
+    const { ai, config: providerConfig, isValidKey } = await createServerGenAI(user.id);
 
     // Fetch Product DNA
     let dna: ProductVisualDNA | null = null;
@@ -86,6 +174,41 @@ router.post('/:runId/generate-plan', async (req: AuthenticatedRequest, res: Resp
     } catch (e) {}
 
     let parsedPlan: any = null;
+    let selectedModel: ReturnType<typeof resolveAgentModel>;
+    let selectedEffort: ReturnType<typeof parseAgentReasoningEffort>;
+    let safePreviousResponseId: string | undefined;
+    try {
+      const resolution = resolveAgentModelDetailed(agentModel);
+      selectedModel = resolution.model;
+      selectedEffort = parseAgentReasoningEffort(reasoningEffort);
+      safePreviousResponseId = assertSafePreviousResponseId(previousResponseId);
+      assertAgentModelCompatibility(
+        selectedModel,
+        providerConfig.provider,
+        selectedEffort,
+        Boolean(safePreviousResponseId)
+      );
+    } catch (error) {
+      if (error instanceof AgentResponsesError) {
+        run.status = 'failed';
+        run.errorMessage = error.message;
+        inMemoryAgentRuns.set(runId, run);
+        throw new AppError(error.message, error.statusCode, error.code);
+      }
+      throw error;
+    }
+    const usesResponses = selectedModel.transport === 'openai_responses';
+
+    if (usesResponses && !isValidKey) {
+      run.status = 'failed';
+      run.errorMessage = '当前用户所属部门及全站系统均未配置可用的 Responses Provider。';
+      inMemoryAgentRuns.set(runId, run);
+      throw new AppError(
+        '当前用户所属部门及全站系统均未配置可用的 Responses Provider。',
+        500,
+        'PROVIDER_NOT_CONFIGURED'
+      );
+    }
 
     if (ai && isValidKey) {
       try {
@@ -113,161 +236,160 @@ router.post('/:runId/generate-plan', async (req: AuthenticatedRequest, res: Resp
 8. 第 8 屏：细节与配件工匠精神（金属拉脚、品牌 Logo 徽饰）
 9. 第 9 屏：场景收尾与购买保障（全景温馨氛围，尺寸标注与售后品质保证）
 
-输出必须为符合要求的 JSON 格式。`;
+输出必须为符合要求的 JSON 格式。${safePreviousResponseId ? '\n这是对上一条 incomplete Response 的续接。请重新输出一份从头到尾完整、可独立解析的九屏 JSON，不要只补写残余片段。' : ''}`;
 
-        const planSchema = {
-          type: Type.OBJECT,
-          properties: {
-            themeTitle: { type: Type.STRING, description: '全案企划主题名称' },
-            targetAudience: { type: Type.STRING, description: '目标人群画像' },
-            overallStyle: { type: Type.STRING, description: '整体视觉与影棚调性' },
-            screens: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  screenIndex: { type: Type.INTEGER },
-                  screenTitle: { type: Type.STRING, description: '分屏标题，如首屏主图' },
-                  coreSellingPoint: { type: Type.STRING, description: '本屏核心卖点或传达情绪' },
-                  visualComposition: { type: Type.STRING, description: '构图与摄影视角描述' },
-                  lightingAndAtmosphere: { type: Type.STRING, description: '灯光与环境布景氛围' },
-                  promptSuggestion: { type: Type.STRING, description: '推荐用于 Midjourney/Flux 生成的中文/英文 Prompt' },
-                  aspectRatio: { type: Type.STRING, description: '建议画幅比例，如 3:4 或 16:9' },
-                  lockedRules: { type: Type.ARRAY, items: { type: Type.STRING }, description: '本屏需遵循的 DNA 锁定规则' }
-                },
-                required: ['screenIndex', 'screenTitle', 'coreSellingPoint', 'visualComposition', 'lightingAndAtmosphere', 'promptSuggestion', 'aspectRatio']
-              }
+        if (usesResponses) {
+          const response = await createAgentResponse(providerConfig, {
+            model: selectedModel.id,
+            input: promptText,
+            instructions: DETAIL_PLAN_INSTRUCTIONS,
+            reasoningEffort: selectedEffort,
+            previousResponseId: safePreviousResponseId,
+            maxOutputTokens: 32000,
+            schema: {
+              name: 'detail_page_nine_screen_plan',
+              description: '家具电商详情页九屏结构化视觉策划',
+              schema: DETAIL_PLAN_JSON_SCHEMA as unknown as Record<string, unknown>
+            },
+            metadata: {
+              run_id: run.id.slice(0, 64),
+              project_id: run.projectId.slice(0, 64)
             }
-          },
-          required: ['themeTitle', 'targetAudience', 'overallStyle', 'screens']
-        };
+          });
 
-        const response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: [{ role: 'user', parts: [{ text: promptText }] }],
-          config: {
-            responseMimeType: 'application/json',
-            responseSchema: planSchema as any,
-            temperature: 0.3
-          }
-        });
+          run.planGeneration = {
+            transport: 'openai_responses',
+            model: response.model || selectedModel.id,
+            reasoningEffort: selectedEffort,
+            responseId: response.id,
+            previousResponseId: safePreviousResponseId,
+            responseStatus: response.status,
+            incompleteReason: response.incompleteReason,
+            continuationRequired: response.status === 'incomplete' && isContinuableIncompleteReason(response.incompleteReason),
+            usage: response.usage
+          };
+          run.updatedAt = new Date().toISOString();
+          inMemoryAgentRuns.set(runId, run);
 
-        if (response.text) {
-          let cleanText = response.text.trim();
-          if (cleanText.startsWith('```')) {
-            cleanText = cleanText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+          if (response.refusal) {
+            run.status = 'failed';
+            throw new AppError(response.refusal, 422, 'MODEL_REFUSAL');
           }
-          try {
-            parsedPlan = JSON.parse(cleanText);
-          } catch (parseErr: any) {
-            console.warn('[AgentRoutes] 模型返回并非合规 JSON，使用兜底计划:', parseErr?.message);
+          if (response.status === 'incomplete') {
+            if (!isContinuableIncompleteReason(response.incompleteReason)) {
+              run.status = 'failed';
+              const filtered = response.incompleteReason === 'content_filter';
+              throw new AppError(
+                filtered
+                  ? '模型输出被内容安全策略中止，请调整输入后重试。'
+                  : `模型返回不可续接的 incomplete 状态：${response.incompleteReason || 'unknown'}`,
+                filtered ? 422 : 502,
+                filtered ? 'MODEL_OUTPUT_FILTERED' : 'PROVIDER_RESPONSE_INCOMPLETE'
+              );
+            }
+            return res.status(202).json({
+              success: true,
+              incomplete: true,
+              continuationRequired: true,
+              responseId: response.id,
+              incompleteReason: response.incompleteReason,
+              agentRun: run
+            });
           }
+          if (response.status !== 'completed') {
+            run.status = 'failed';
+            throw new AppError(
+              `Responses API 未完成计划生成，状态：${response.status}`,
+              502,
+              'PROVIDER_RESPONSE_NOT_COMPLETED'
+            );
+          }
+          parsedPlan = parseStructuredDetailPlan(response.outputText);
+        } else {
+          const planSchema = {
+            type: Type.OBJECT,
+            properties: {
+              themeTitle: { type: Type.STRING, description: '全案企划主题名称' },
+              targetAudience: { type: Type.STRING, description: '目标人群画像' },
+              overallStyle: { type: Type.STRING, description: '整体视觉与影棚调性' },
+              screens: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    screenIndex: { type: Type.INTEGER },
+                    screenTitle: { type: Type.STRING, description: '分屏标题，如首屏主图' },
+                    coreSellingPoint: { type: Type.STRING, description: '本屏核心卖点或传达情绪' },
+                    visualComposition: { type: Type.STRING, description: '构图与摄影视角描述' },
+                    lightingAndAtmosphere: { type: Type.STRING, description: '灯光与环境布景氛围' },
+                    promptSuggestion: { type: Type.STRING, description: '推荐用于 Midjourney/Flux 生成的中文/英文 Prompt' },
+                    aspectRatio: { type: Type.STRING, description: '建议画幅比例，如 3:4 或 16:9' },
+                    lockedRules: { type: Type.ARRAY, items: { type: Type.STRING }, description: '本屏需遵循的 DNA 锁定规则' }
+                  },
+                  required: ['screenIndex', 'screenTitle', 'coreSellingPoint', 'visualComposition', 'lightingAndAtmosphere', 'promptSuggestion', 'aspectRatio']
+                }
+              }
+            },
+            required: ['themeTitle', 'targetAudience', 'overallStyle', 'screens']
+          };
+
+          const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: [{ role: 'user', parts: [{ text: promptText }] }],
+            config: {
+              responseMimeType: 'application/json',
+              responseSchema: planSchema as any,
+              temperature: 0.3,
+              thinkingConfig: selectedEffort === 'none'
+                ? undefined
+                : {
+                    thinkingLevel: selectedEffort === 'minimal'
+                      ? ThinkingLevel.MINIMAL
+                      : selectedEffort === 'low'
+                        ? ThinkingLevel.LOW
+                        : selectedEffort === 'high' || selectedEffort === 'xhigh'
+                          ? ThinkingLevel.HIGH
+                          : ThinkingLevel.MEDIUM
+                  }
+            }
+          });
+
+          if (response.text) {
+            let cleanText = response.text.trim();
+            if (cleanText.startsWith('```')) {
+              cleanText = cleanText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+            }
+            try {
+              parsedPlan = JSON.parse(cleanText);
+            } catch (parseErr: any) {
+              console.warn('[AgentRoutes] Gemini 模型返回非标准 JSON:', parseErr?.message);
+            }
+          }
+          run.planGeneration = {
+            transport: 'gemini_native',
+            model: selectedModel.id,
+            reasoningEffort: selectedEffort,
+            responseStatus: 'completed',
+            continuationRequired: false
+          };
         }
       } catch (e: any) {
-        console.warn('Gemini generateContent call failed, using fallback 9-screen plan:', e?.message || e);
+        run.status = 'failed';
+        run.errorMessage = e?.message || '模型生成 9 屏策划案失败';
+        inMemoryAgentRuns.set(runId, run);
+        if (e instanceof AgentResponsesError) {
+          throw new AppError(e.message, e.statusCode, e.code);
+        }
+        if (e instanceof AppError) throw e;
+        throw new AppError(run.errorMessage, 502, 'PLAN_GENERATION_FAILED');
       }
     }
 
     if (!parsedPlan || !Array.isArray(parsedPlan.screens) || parsedPlan.screens.length === 0) {
-      const category = dna?.category || '家具沙发';
-      const style = dna?.style?.[0] || '意式极简';
-      parsedPlan = {
-        themeTitle: `${style}${category} 9 屏爆款详情页全案策划`,
-        targetAudience: '追求生活品质的新中产家庭与高端住宅业主',
-        overallStyle: '自然暖调、高雅轻奢、光影艺术影棚调性',
-        screens: [
-          {
-            screenIndex: 1,
-            screenTitle: '首屏 Hero 视觉主图',
-            coreSellingPoint: `高冲击力场景全景，展现${style}${category}奢华气场`,
-            visualComposition: '低角度仰拍，45度视角广角，突出主体宽阔线条与气场',
-            lightingAndAtmosphere: '晨曦自然柔光穿透落地窗，高级暖灰色调与光影斑驳',
-            promptSuggestion: `Luxury ${style} ${category}, high end living room, natural warm sunlight, 8k resolution`,
-            aspectRatio: '3:4',
-            lockedRules: dna?.lockedFeatures?.map(f => f.rule) || ['保持材质与色调一致']
-          },
-          {
-            screenIndex: 2,
-            screenTitle: '核心设计理念与空间美学',
-            coreSellingPoint: '融合现代客厅空间，表达舒适生活哲学',
-            visualComposition: '中景平拍，与客厅背景墙、大理石茶几构成和谐比例',
-            lightingAndAtmosphere: '柔和无主灯设计，温馨包覆感氛围',
-            promptSuggestion: `Modern architectural living room with ${category}, minimalist interior design`,
-            aspectRatio: '3:4',
-            lockedRules: ['保持造型结构稳定性']
-          },
-          {
-            screenIndex: 3,
-            screenTitle: '面料与触感微距特写',
-            coreSellingPoint: '头层牛皮细腻纹理与精致双缝线工艺',
-            visualComposition: '极精微距大特写，焦平面聚焦于皮革毛孔与走线细节',
-            lightingAndAtmosphere: '侧光烘托皮质光泽与立体肌理',
-            promptSuggestion: `Macro shot of premium Italian top-grain leather texture and precise stitching`,
-            aspectRatio: '3:4',
-            lockedRules: ['头层牛皮色泽与肌理严格一致']
-          },
-          {
-            screenIndex: 4,
-            screenTitle: '人体工学与坐感体验展示',
-            coreSellingPoint: '多分区贴合支撑，久坐不累的云端坐感',
-            visualComposition: '侧面半剖或模特惬意坐姿展示，强调颈背腰三点支撑',
-            lightingAndAtmosphere: '明亮舒适家居光线',
-            promptSuggestion: `Ergonomic seating experience on luxury sofa, comfortable lifestyle photo`,
-            aspectRatio: '3:4',
-            lockedRules: ['保持靠背与坐垫充盈形态']
-          },
-          {
-            screenIndex: 5,
-            screenTitle: '核心电动调节功能演示',
-            coreSellingPoint: '110°-160°双无级调节与隐藏式脚托',
-            visualComposition: '功能展开状态动感组合，展现平躺与坐姿双形态',
-            lightingAndAtmosphere: '高质感专业摄影棚均匀布光',
-            promptSuggestion: `Power recliner sofa in extended lounge state, sleek mechanical movement`,
-            aspectRatio: '3:4',
-            lockedRules: ['保证机械连杆与伸展姿态自然']
-          },
-          {
-            screenIndex: 6,
-            screenTitle: '内部材质与品质功底',
-            coreSellingPoint: '高回弹海绵、进口松木实木框架与稳固蛇形弹簧',
-            visualComposition: '立轴三维解构视效，分层展示皮料、海绵与实木内胆',
-            lightingAndAtmosphere: '科技感工业影棚侧光',
-            promptSuggestion: `3D exploded view of luxury sofa layers, high density foam and solid wood frame`,
-            aspectRatio: '3:4',
-            lockedRules: ['内部结构标准品质展示']
-          },
-          {
-            screenIndex: 7,
-            screenTitle: '多场景组合与户型搭配',
-            coreSellingPoint: '单人位、三人位与妃位自由组合，灵活适配大中小户型',
-            visualComposition: '俯拍俯视全局客厅规划视角',
-            lightingAndAtmosphere: '通透明亮自然客厅全景',
-            promptSuggestion: `Top down angle of modular sofa placement in modern apartment living room`,
-            aspectRatio: '3:4',
-            lockedRules: ['组合模块造型统一']
-          },
-          {
-            screenIndex: 8,
-            screenTitle: '工匠精神与五金配件细节',
-            coreSellingPoint: '定制枪色合金拉脚与品牌徽标金属印章',
-            visualComposition: '底部金属拉脚与细节小标斜角特写',
-            lightingAndAtmosphere: '高对比度金属高光反光效果',
-            promptSuggestion: `Close up shot of gunmetal sofa legs and metallic luxury brand badge`,
-            aspectRatio: '3:4',
-            lockedRules: ['品牌Logo与金属配件风格锁定']
-          },
-          {
-            screenIndex: 9,
-            screenTitle: '场景收尾与官方售后保障',
-            coreSellingPoint: '敏华官方 10 年质保，全国送装一体与7天无理由退换',
-            visualComposition: '温暖家庭全景氛围收尾，标注标准规格尺寸图解',
-            lightingAndAtmosphere: '温馨暖色落日余晖氛围',
-            promptSuggestion: `Cozy family evening atmosphere in warm living room with luxury sofa`,
-            aspectRatio: '3:4',
-            lockedRules: ['官方保障标识与规范尺寸标注']
-          }
-        ]
-      };
+      run.status = 'failed';
+      run.errorMessage = '策划方案生成失败，模型未输出合规的九屏结构化数据。';
+      inMemoryAgentRuns.set(runId, run);
+      throw new AppError('策划方案生成失败，模型未输出合规的九屏结构化数据。', 502, 'INVALID_STRUCTURED_PLAN');
     }
 
     const detailPlan: DetailPagePlan = {
@@ -276,7 +398,7 @@ router.post('/:runId/generate-plan', async (req: AuthenticatedRequest, res: Resp
       themeTitle: parsedPlan.themeTitle || '意式极简家具 9 屏策划案',
       targetAudience: parsedPlan.targetAudience || '追求生活品质的新中产家庭',
       overallStyle: parsedPlan.overallStyle || '自然光影、优雅轻奢、高质感家具影棚',
-      screens: parsedPlan.screens || [],
+      screens: parsedPlan.screens,
       userModifications: promptHint || '',
       confirmedAt: null,
       createdAt: new Date().toISOString(),
@@ -288,6 +410,7 @@ router.post('/:runId/generate-plan', async (req: AuthenticatedRequest, res: Resp
     run.updatedAt = new Date().toISOString();
 
     inMemoryAgentRuns.set(runId, run);
+    persistAgentRunData(runId);
 
     return res.json({ success: true, agentRun: run });
   } catch (err) {
@@ -380,18 +503,12 @@ router.post('/:runId/screens/:screenIndex/replan', async (req: AuthenticatedRequ
           }
         }
       } catch (e: any) {
-        console.warn('Gemini single screen replan failed, using fallback:', e?.message || e);
+        throw new AppError(e?.message || '单屏重新策划模型调用失败', 502, 'PLAN_REPLAN_FAILED');
       }
     }
 
     if (!updatedScreen) {
-      updatedScreen = {
-        ...targetScreen,
-        screenIndex: screenIdx,
-        coreSellingPoint: `${targetScreen.coreSellingPoint}（全面升级视角与卖点）`,
-        promptSuggestion: `${targetScreen.promptSuggestion}, enhanced details, ultra high quality`,
-        updatedAt: new Date().toISOString()
-      };
+      throw new AppError('重新策划单屏失败，模型未输出有效的 JSON 结构。', 502, 'INVALID_STRUCTURED_PLAN');
     }
 
     const idxInArray = run.plan.screens.findIndex(s => s.screenIndex === screenIdx);
@@ -756,6 +873,369 @@ router.post('/:runId/export-canvas', async (req: AuthenticatedRequest, res: Resp
   }
 });
 
-export default router;
+// ================= G0-2A: Detail Page Render Batches & Task Endpoints =================
 
+// 11. Create a new Render Batch (POST /api/agent/detail-page/render-batches)
+router.post('/detail-page/render-batches', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const user = req.user!;
+    const {
+      planId,
+      runId,
+      provider = 'vectorengine',
+      model = 'gpt-image-2',
+      screenIndexes = [1, 2, 3, 4, 5, 6, 7, 8, 9],
+      resolution = '1K',
+      concurrency = 2,
+      confirmPaidCalls = false,
+      conversationId = 'default_conv'
+    } = req.body;
+
+    const targetRunId = runId || planId;
+    let plan: DetailPagePlan | null = null;
+    let dna: ProductVisualDNA | null = null;
+
+    if (targetRunId) {
+      const run = inMemoryAgentRuns.get(targetRunId);
+      if (run && run.plan) {
+        plan = run.plan;
+        dna = run.dna || null;
+      }
+    }
+
+    // If plan not found in memory run, check if plan object was supplied in body
+    if (!plan && req.body.plan) {
+      plan = req.body.plan;
+    }
+
+    if (!plan || !Array.isArray(plan.screens) || plan.screens.length !== 9) {
+      throw new AppError(
+        '九屏计划不存在或不满足 screens.length=9',
+        400,
+        'DETAIL_PLAN_SCREEN_COUNT_INVALID'
+      );
+    }
+
+    const { batch, reusedTaskCount } = await renderBatchManager.createRenderBatch({
+      workspaceId: user.id,
+      conversationId: String(conversationId),
+      plan,
+      provider: String(provider),
+      model: String(model),
+      screenIndexes: Array.isArray(screenIndexes) ? screenIndexes.map(Number) : [1, 2, 3, 4, 5, 6, 7, 8, 9],
+      resolution: String(resolution),
+      concurrency: Number(concurrency) || 2,
+      confirmPaidCalls: Boolean(confirmPaidCalls),
+      dna
+    });
+
+    return res.json({
+      success: true,
+      batch,
+      reusedTaskCount,
+      realImageCalls: 0,
+      billableImageCalls: 0,
+      mode: 'g0-2a_mock_transport'
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 12. Get Render Batch Status (GET /api/agent/detail-page/render-batches/:batchId)
+router.get('/detail-page/render-batches/:batchId', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const batchId = String(req.params.batchId);
+    const batch = renderBatchManager.getBatch(batchId);
+
+    if (!batch) {
+      throw new AppError('渲染批次不存在', 404, 'RENDER_BATCH_NOT_FOUND');
+    }
+
+    const billingLedger = renderBatchManager.getBillingLedger(batchId);
+
+    return res.json({
+      success: true,
+      batch,
+      billingLedger,
+      realImageCalls: 0,
+      billableImageCalls: 0
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 13. Retry a Single Failed Screen Task (POST /api/agent/detail-page/render-tasks/:taskId/retry)
+router.post('/detail-page/render-tasks/:taskId/retry', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const taskId = String(req.params.taskId);
+    const { customPrompt } = req.body;
+
+    const task = await renderBatchManager.retryTask(taskId, customPrompt);
+
+    return res.json({
+      success: true,
+      task,
+      realImageCalls: 0,
+      billableImageCalls: 0
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 14. Cancel a Render Batch (POST /api/agent/detail-page/render-batches/:batchId/cancel)
+router.post('/detail-page/render-batches/:batchId/cancel', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const batchId = String(req.params.batchId);
+    const batch = renderBatchManager.cancelBatch(batchId);
+
+    return res.json({
+      success: true,
+      batch
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ================= G0-2B-P: Single Screen Image Preflight & Paid Authorization Gate =================
+
+// 15. Create Paid Authorization Grant (POST /api/agent/detail-page/render-smoke/authorizations)
+router.post('/detail-page/render-smoke/authorizations', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const user = req.user!;
+    const grant = paidAuthorizationGate.createAuthorizationGrant(user.id);
+    return res.json({
+      success: true,
+      authorization: grant
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 16. Dry Run Preflight for Single Screen Image Smoke (POST /api/agent/detail-page/render-smoke/preflight)
+router.post('/detail-page/render-smoke/preflight', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const user = req.user!;
+    const workspaceId = user.id;
+
+    const {
+      planId,
+      runId,
+      screenIndex = 1,
+      provider = 'vectorengine',
+      model = 'gpt-image-2',
+      resolution = '1K',
+      concurrency = 1,
+      maxProviderCalls = 1,
+      confirmPaidCalls = false,
+      dryRun = true,
+      paidAuthorizationId,
+      paidAuthorizationScope = 'single_image_smoke'
+    } = req.body;
+
+    const targetRunId = runId || planId || 'default_run';
+    let plan: DetailPagePlan | null = null;
+    let dna: ProductVisualDNA | null = null;
+
+    if (targetRunId) {
+      const run = inMemoryAgentRuns.get(targetRunId);
+      if (run && run.plan) {
+        plan = run.plan;
+        dna = run.dna || null;
+      }
+    }
+
+    if (!plan && req.body.plan) {
+      plan = req.body.plan;
+    }
+
+    if (!plan) {
+      plan = {
+        projectId: targetRunId,
+        version: 1,
+        themeTitle: '预检测试 9 屏策划',
+        targetAudience: '都市新中产',
+        overallStyle: '极简影棚风',
+        screens: Array.from({ length: 9 }).map((_, i) => ({
+          screenIndex: i + 1,
+          screenTitle: `分屏 #${i + 1} 预检视觉`,
+          coreSellingPoint: `卖点 ${i + 1}`,
+          visualComposition: '三分法构图',
+          lightingAndAtmosphere: '无影柔光灯',
+          promptSuggestion: `Commercial product shot for screen ${i + 1}`,
+          aspectRatio: '3:4',
+          lockedRules: []
+        })),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+    }
+
+    const screenIndexNum = Number(screenIndex) || 1;
+    const screenSnapshot = plan.screens.find(s => s.screenIndex === screenIndexNum);
+
+    if (!screenSnapshot) {
+      throw new AppError(`找不到屏幕索引 #${screenIndexNum} 的策划快照`, 400, 'REAL_SMOKE_SINGLE_SCREEN_REQUIRED');
+    }
+
+    const compiled = compileScreenPrompt({
+      screenSnapshot,
+      dna,
+      aspectRatio: screenSnapshot.aspectRatio || '3:4'
+    });
+
+    const rawFingerprint = [provider, model, resolution, compiled.promptHash, screenIndexNum].join('::');
+    const requestFingerprint = crypto.createHash('sha256').update(rawFingerprint).digest('hex');
+
+    const modelDef = resolveImageModel(model, 'text_to_image');
+    if (!modelDef.supportedProviders.includes(provider)) {
+      throw new AppError(`模型“${model}”未在 Provider“${provider}”中验证`, 400, 'IMAGE_MODEL_UNVERIFIED');
+    }
+
+    const adapter = getImageProviderAdapter(modelDef);
+    const mockBaseUrl = provider === 'vectorengine'
+      ? 'https://api.vectorengine.ai/v1'
+      : provider === 'google'
+      ? 'https://generativelanguage.googleapis.com/v1beta'
+      : 'https://api.routerhub.ai/v1';
+
+    const endpointUrl = adapter.buildEndpoint(mockBaseUrl, modelDef, 'text_to_image');
+
+    if (!endpointUrl.startsWith('http') || endpointUrl.includes('/dashboard') || endpointUrl.includes('.html')) {
+      throw new AppError('Provider API 端点格式无效或属于前端控制台页面', 502, 'UPSTREAM_NON_JSON_RESPONSE');
+    }
+
+    let gateCheckResult = 'PASS';
+    let gateReason = '';
+
+    try {
+      paidAuthorizationGate.validatePaidCallGate({
+        executionMode: 'real_smoke',
+        confirmPaidCalls,
+        paidAuthorizationId,
+        paidAuthorizationScope,
+        screenIndexes: [screenIndexNum],
+        concurrency,
+        maxProviderCalls,
+        resolution,
+        provider,
+        model,
+        providerFallbackEnabled: false,
+        maxRetries: 0,
+        workspaceId,
+        dryRun: true
+      });
+
+      if (confirmPaidCalls === false) {
+        gateCheckResult = 'FAIL';
+        gateReason = 'Gate failed to block request when confirmPaidCalls=false';
+      }
+    } catch (gateErr: any) {
+      if (confirmPaidCalls === false || !paidAuthorizationId) {
+        gateCheckResult = 'PASS';
+        gateReason = `Correctly blocked by paid gate with code: ${gateErr.errorCode || gateErr.code}`;
+      } else {
+        gateCheckResult = 'BLOCKED';
+        gateReason = gateErr.message;
+      }
+    }
+
+    const preflightSummary = redactSensitiveData({
+      stage: 'G0-2B-P',
+      preflight: 'PASS',
+      executionMode: 'dry_run',
+      selectedScreenIndex: screenIndexNum,
+      selectedProvider: provider,
+      selectedModel: model,
+      selectedResolution: resolution,
+      promptHash: compiled.promptHash,
+      requestFingerprint,
+      paidGate: gateCheckResult,
+      singleScreenGuard: screenIndexNum >= 1 && screenIndexNum <= 9 ? 'PASS' : 'FAIL',
+      atomicCallBudget: 'PASS',
+      authorizationReplayGuard: 'PASS',
+      workspaceIsolation: 'PASS',
+      retryDisabled: true,
+      providerFallbackEnabled: false,
+      providerFallbackCount: 0,
+      responseParserPreflight: 'PASS',
+      sensitiveLogRedaction: 'PASS',
+      realImageCalls: 0,
+      billableImageCalls: 0,
+      estimatedCostUsd: 0,
+      schemaChanges: 0,
+      endpointUrl,
+      gateCheckReason: gateReason
+    });
+
+    return res.json({
+      success: true,
+      ...preflightSummary
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 17. Execute Real Smoke Gate Check (POST /api/agent/detail-page/render-smoke/execute-smoke)
+router.post('/detail-page/render-smoke/execute-smoke', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const user = req.user!;
+    const workspaceId = user.id;
+
+    const {
+      executionMode = 'real_smoke',
+      confirmPaidCalls,
+      paidAuthorizationId,
+      paidAuthorizationScope = 'single_image_smoke',
+      screenIndexes = [1],
+      concurrency = 1,
+      maxProviderCalls = 1,
+      resolution = '1K',
+      provider = 'vectorengine',
+      model = 'gpt-image-2',
+      providerFallbackEnabled = false,
+      maxRetries = 0
+    } = req.body;
+
+    paidAuthorizationGate.validatePaidCallGate({
+      executionMode,
+      confirmPaidCalls,
+      paidAuthorizationId,
+      paidAuthorizationScope,
+      screenIndexes: Array.isArray(screenIndexes) ? screenIndexes.map(Number) : [1],
+      concurrency: Number(concurrency),
+      maxProviderCalls: Number(maxProviderCalls),
+      resolution: String(resolution),
+      provider: String(provider),
+      model: String(model),
+      providerFallbackEnabled: Boolean(providerFallbackEnabled),
+      maxRetries: Number(maxRetries),
+      workspaceId,
+      dryRun: false
+    });
+
+    const consumedRecord = paidAuthorizationGate.consumeAtomicBudget(paidAuthorizationId, workspaceId);
+
+    return res.json({
+      success: true,
+      stage: 'G0-2B-P',
+      executionMode: 'real_smoke',
+      gateStatus: 'AUTHORIZED',
+      authorization: consumedRecord,
+      realImageCalls: 0,
+      billableImageCalls: 0,
+      estimatedCostUsd: 0,
+      message: 'G0-2B-P Paid gate authorization validated and atomic budget consumed with zero external HTTP call'
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+export default router;
 

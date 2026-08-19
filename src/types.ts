@@ -17,6 +17,15 @@ export interface MaskStroke {
   tool?: 'brush' | 'eraser' | 'rect';
 }
 
+export type GenerationIntent = 'text_to_image' | 'image_edit';
+export type ImageRole =
+  | 'primary_product'
+  | 'scene_reference'
+  | 'material_reference'
+  | 'person_reference'
+  | 'composition_reference'
+  | 'style_reference';
+
 export interface ImageAttachment {
   id: string;
   file?: File;
@@ -31,13 +40,16 @@ export interface ImageAttachment {
   maskStrokes?: MaskStroke[];
   maskDataUrl?: string;
   maskOverlayUrl?: string;
+  role?: ImageRole;
+  referenceAssetId?: string;
+  order?: number;
 }
 
 export type SupportedAspectRatio = '1:1' | '1:4' | '1:8' | '2:3' | '3:2' | '3:4' | '4:1' | '4:3' | '4:5' | '5:4' | '8:1' | '9:16' | '16:9' | '21:9'; 
 export type UIAspRatioOption = SupportedAspectRatio | 'Auto' | 'Custom'; 
 
 export type Resolution = '1K' | '2K' | '4K' | '512px';
-export type ModelType = 'gemini-3-pro' | 'gemini-2.5-pro' | 'gemini-2.5-flash' | 'gemini-3-flash' | 'gemini-3.1-flash-lite-preview' | 'gemini-3.1-flash-image-preview' | 'gemini-3-pro-image-preview' | 'google/gemini-3-pro-image-preview' | 'gemini-3.1-flash-image' | 'gemini-3-pro-image' | 'google/gemini-3-pro-image' | 'gemini-2.5-flash-image' | 'gpt-image-2' | 'openai/gpt-image-1' | 'openai/gpt-image-1.5' | 'openai/gpt-image-2' | 'routerhub/flux' | 'routerhub/midjourney';
+export type ModelType = 'gemini-3-pro' | 'gemini-2.5-pro' | 'gemini-2.5-flash' | 'gemini-3-flash' | 'gemini-3.1-flash-lite-preview' | 'gemini-3.1-flash-image-preview' | 'gemini-3-pro-image-preview' | 'google/gemini-3-pro-image-preview' | 'gemini-3.1-flash-image' | 'gemini-3-pro-image' | 'google/gemini-3-pro-image' | 'gemini-2.5-flash-image' | 'gpt-image-2' | 'gpt-image-2-all' | 'openai/gpt-image-1' | 'openai/gpt-image-1.5' | 'openai/gpt-image-2' | 'openai/gpt-image-2-all' | 'routerhub/flux' | 'routerhub/midjourney';
 
 export interface GenerationConfig {
   prompt: string;
@@ -261,7 +273,7 @@ export type AgentRunStatus =
 
 export const ALLOWED_STATUS_TRANSITIONS: Record<AgentRunStatus, AgentRunStatus[]> = {
   dna_confirmed: ['plan_generating', 'canceled'],
-  plan_generating: ['plan_review', 'failed', 'canceled'],
+  plan_generating: ['plan_review', 'plan_generating', 'failed', 'canceled'],
   plan_review: ['plan_approved', 'plan_generating', 'canceled'],
   plan_approved: ['tasks_generating', 'canceled'],
   tasks_generating: ['completed', 'failed', 'canceled'],
@@ -303,13 +315,102 @@ export interface AgentRun {
   totalSteps: number;
   plan: DetailPagePlan | null;
   planVersion: number;
+  planGeneration?: {
+    transport: 'gemini_native' | 'openai_responses';
+    model: string;
+    reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+    responseId?: string;
+    previousResponseId?: string;
+    responseStatus?: 'completed' | 'incomplete' | 'failed' | 'in_progress' | 'queued' | 'cancelled';
+    incompleteReason?: string;
+    continuationRequired?: boolean;
+    usage?: Record<string, unknown> | null;
+  };
   dna?: ProductVisualDNA;
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;
 }
 
-// ================= Phase 4: Image Generation Task & Rendering Queue =================
+// ================= Phase 4: Image Generation Task & Rendering Queue (G0-2 Core Domain Types) =================
+export type RenderBatchStatus =
+  | 'draft'
+  | 'queued'
+  | 'running'
+  | 'partial_failed'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type RenderTaskStatus =
+  | 'pending'
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'blocked';
+
+export interface RenderBatch {
+  id: string;
+  workspaceId: string;
+  conversationId: string;
+  planId: string;
+  planVersion: number;
+  screenCount: 9;
+  status: RenderBatchStatus;
+  requestedModel: string;
+  requestedProvider: string;
+  concurrency: number;
+  estimatedMaxCalls: number;
+  actualCalls: number;
+  billableCalls: number;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  tasks?: RenderTask[];
+}
+
+export interface RenderTask {
+  id: string;
+  batchId: string;
+  screenIndex: number;
+  screenSnapshot: DetailPageScreenPlan;
+  promptSnapshot: string;
+  promptHash?: string;
+  aspectRatio: string;
+  resolution: string;
+  expectedSize: string;
+  status: RenderTaskStatus;
+  attempt: number;
+  idempotencyKey: string;
+  providerRequestId?: string;
+  assetId?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  actualWidth?: number;
+  actualHeight?: number;
+  billable?: boolean;
+  estimatedCostUsd?: number;
+  resultImageUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ImageBillingRecord {
+  taskId: string;
+  batchId: string;
+  provider: string;
+  model: string;
+  attemptedCalls: number;
+  billableCalls: number;
+  pricingSource: string;
+  unitPrice?: number;
+  estimatedCostUsd?: number;
+  currency: 'USD';
+  recordedAt: string;
+}
+
 export type DetailPageTaskStatus = 'pending' | 'generating' | 'completed' | 'failed';
 
 export interface DetailPageRenderTask {
@@ -358,6 +459,10 @@ export interface DetailPageSliceAsset {
   sliceImageUrl: string;
   width: number;
   height: number;
+  aspectRatio?: string;
+  version?: number;
+  sourceTaskId?: string;
+  providerRequestId?: string;
 }
 
 export interface DetailPageExportResult {
@@ -368,4 +473,3 @@ export interface DetailPageExportResult {
   config: DetailPageCanvasConfig;
   exportedAt: string;
 }
-

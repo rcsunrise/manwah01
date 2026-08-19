@@ -57,23 +57,39 @@ export async function parseJsonResponse<T>(response: Response): Promise<T> {
   const contentType = response.headers.get("content-type") ?? "";
   const rawText = await response.text();
 
-  if (!response.ok) {
-    let message = `请求失败（HTTP ${response.status}）`;
+  const isHtml = contentType.includes("text/html") || /^\s*<!DOCTYPE\s+html/i.test(rawText) || /^\s*<html/i.test(rawText);
 
+  if (!response.ok) {
+    if (isHtml) {
+      if (response.status === 504 || /gateway\s*time-?out|timeout/i.test(rawText)) {
+        throw new Error(`服务器网关响应超时（HTTP 504），模型生成耗时较长，请重试或调整思考等级。`);
+      }
+      if (response.status === 502 || /bad\s*gateway/i.test(rawText)) {
+        throw new Error(`服务器上游响应异常（HTTP 502），请重新发起请求。`);
+      }
+      const titleMatch = rawText.match(/<title>(.*?)<\/title>/i);
+      const title = titleMatch ? titleMatch[1].trim() : '';
+      throw new Error(title ? `服务器返回 HTML 错误 (${response.status}): ${title}` : `服务器返回 HTML 错误页面（HTTP ${response.status}）`);
+    }
+
+    let message = `请求失败（HTTP ${response.status}）`;
     if (rawText.trim()) {
       try {
         const errorData = JSON.parse(rawText) as {
-          error?: string;
+          error?: string | { message?: string };
           message?: string;
           requestId?: string;
         };
 
-        message =
-          errorData.message ||
-          errorData.error ||
-          message;
+        if (typeof errorData.error === 'object' && errorData.error?.message) {
+          message = errorData.error.message;
+        } else if (typeof errorData.error === 'string') {
+          message = errorData.error;
+        } else if (errorData.message) {
+          message = errorData.message;
+        }
       } catch {
-        message = rawText.slice(0, 300);
+        message = rawText.slice(0, 200);
       }
     }
 
@@ -87,6 +103,9 @@ export async function parseJsonResponse<T>(response: Response): Promise<T> {
   }
 
   if (!contentType.includes("application/json")) {
+    if (isHtml) {
+      throw new Error(`九屏企划接口返回了非 JSON 内容：text/html（服务器响应超时或路由被重定向到 HTML 页面，请重试。）`);
+    }
     throw new Error(
       `九屏企划接口返回了非 JSON 内容：${contentType || "unknown"}`
     );

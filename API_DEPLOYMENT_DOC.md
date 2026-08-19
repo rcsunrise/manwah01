@@ -23,16 +23,18 @@
 - **图片生成 (DALL-E格式)**: `POST /v1/images/generations` (被代理通道覆盖)
 - **图片编辑 (DALL-E格式)**: `POST /v1/images/edits` (被代理通道覆盖)
 - **原生 Gemini 文本生成**: `POST /v1beta/models/...:generateContent`
-- **原生 Gemini 图片生成**: `POST /api/routerhub/generate-image`
+- **统一图片生成/编辑网关**: `POST /api/gateway/generate-image`
 
 ### 3. Supabase 数据存储与配置注入
-在最新版本中，**Global Config (全局设定)** 被存入 Supabase 的 `admin_notes` (ID: 2)。由于我们已经在 `server.ts` 本地环境中使用了全权限的 Supabase Backend Key (`supabaseAdmin`)，所以 SQL 数据库配置完全可安全在服务端注入和校验，并能根据用户 `uuid` 智能切换路由端至对应的 **RouterHub** 或 **VectorEngine**：
+在最新版本中，**Global Config（全局设定）** 与部门配置统一存入 Supabase 的 `department_configs`。`server.ts` 使用服务端 Supabase 管理客户端读取配置，并根据经过认证的用户 UUID 选择所属部门或“全站系统”的 **RouterHub**、**VectorEngine** 或其他兼容 Provider：
 ```sql
--- admin_notes 表保存结构：
+-- department_configs 关键字段示意：
 {
-  "activeProvider": "vectorengine",
-  "routerhub": { "baseUrl": "...", "apiKey": "..." },
-  "vectorengine": { "baseUrl": "...", "apiKey": "..." }
+  "dept_name": "全站系统",
+  "api_base_url": "...",
+  "api_key": "...",
+  "routing_mode": "...",
+  "method1_key": "..."
 }
 ```
 

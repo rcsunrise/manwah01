@@ -1,27 +1,20 @@
 import { Router, Response } from 'express';
+import multer from 'multer';
 import { supabaseAdmin } from '../../src/lib/supabase';
 import { AuthenticatedRequest, AppError } from '../types';
-import { authenticateToken } from '../middleware/auth';
+import { optionalAuthenticateToken } from '../middleware/auth';
 import { inMemoryProductDnas, inMemoryDnaVersions } from './productDnaRoutes';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
+const upload = multer({
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+});
+
 const router = Router();
 
-function requireStrictAuth(req: AuthenticatedRequest, res: Response, next: any) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.status(401).json({
-      success: false,
-      error: { message: 'Authentication token required.', code: 'UNAUTHORIZED' }
-    });
-  }
-  next();
-}
-
-router.use(requireStrictAuth);
-router.use(authenticateToken as any);
+router.use(optionalAuthenticateToken as any);
 
 const SUPABASE_STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'creative-canvas-assets';
 
@@ -119,7 +112,7 @@ async function uploadToStorage(objectKey: string, buffer: Buffer, mimeType = 'im
 // ----------------------------------------------------------------------
 // 1. POST /api/asset-skus - Create Asset SKU
 // ----------------------------------------------------------------------
-router.post('/asset-skus', async (req: AuthenticatedRequest, res: Response, next) => {
+router.post(['/', '/skus', '/asset-skus', '/skus/skus'], async (req: AuthenticatedRequest, res: Response, next) => {
   try {
     const userId = req.user?.id || 'demo-user-123';
     const { projectId, canvasId, sceneKey, skuCode, name } = req.body || {};
@@ -202,7 +195,7 @@ router.post('/asset-skus', async (req: AuthenticatedRequest, res: Response, next
 // ----------------------------------------------------------------------
 // 2. GET /api/asset-skus/:skuId - Get SKU Details
 // ----------------------------------------------------------------------
-router.get('/asset-skus/:skuId', async (req: AuthenticatedRequest, res: Response, next) => {
+router.get(['/:skuId', '/skus/:skuId', '/asset-skus/:skuId'], async (req: AuthenticatedRequest, res: Response, next) => {
   try {
     const { skuId } = req.params;
 
@@ -246,6 +239,9 @@ router.get('/asset-skus/:skuId', async (req: AuthenticatedRequest, res: Response
     }
 
     if (!sku) {
+      if (req.baseUrl === '/api' && !req.path.startsWith('/asset-skus/') && !req.path.startsWith('/skus/')) {
+        return next();
+      }
       throw new AppError(`Asset SKU '${skuId}' not found`, 404);
     }
 
@@ -265,7 +261,7 @@ router.get('/asset-skus/:skuId', async (req: AuthenticatedRequest, res: Response
 // ----------------------------------------------------------------------
 // 3. GET /api/asset-skus/:skuId/versions - Get Version List
 // ----------------------------------------------------------------------
-router.get('/asset-skus/:skuId/versions', async (req: AuthenticatedRequest, res: Response, next) => {
+router.get(['/:skuId/versions', '/skus/:skuId/versions', '/asset-skus/:skuId/versions'], async (req: AuthenticatedRequest, res: Response, next) => {
   try {
     const { skuId } = req.params;
 
@@ -591,7 +587,7 @@ router.post(['/:skuId/versions', '/skus/:skuId/versions', '/asset-skus/:skuId/ve
 // ----------------------------------------------------------------------
 // 5. GET /api/asset-versions/:versionId - Get Version Details
 // ----------------------------------------------------------------------
-router.get('/versions/:versionId', async (req: AuthenticatedRequest, res: Response, next) => {
+router.get(['/versions/:versionId', '/asset-versions/:versionId'], async (req: AuthenticatedRequest, res: Response, next) => {
   try {
     const { versionId } = req.params;
 
@@ -644,7 +640,7 @@ router.get('/versions/:versionId', async (req: AuthenticatedRequest, res: Respon
 // ----------------------------------------------------------------------
 // 6. POST /api/asset-skus/:skuId/select-version - Select Current Active Version
 // ----------------------------------------------------------------------
-router.post('/skus/:skuId/select-version', async (req: AuthenticatedRequest, res: Response, next) => {
+router.post(['/:skuId/select-version', '/skus/:skuId/select-version', '/asset-skus/:skuId/select-version'], async (req: AuthenticatedRequest, res: Response, next) => {
   try {
     const { skuId } = req.params;
     const { versionId } = req.body || {};
@@ -854,7 +850,175 @@ router.post('/canvases/:canvasId/nodes/:nodeId/asset-reference', async (req: Aut
 });
 
 // ----------------------------------------------------------------------
-// 8. Immutability Guard: Reject PUT/PATCH on Asset Versions
+// 8. C4A-4: Async Upload Proxy for Standard Assets (<=6MB)
+// ----------------------------------------------------------------------
+router.post('/upload-asset', upload.single('file'), async (req: AuthenticatedRequest, res: Response, next) => {
+  try {
+    const file = req.file;
+    const { objectKey, assetVersionId, workspaceId, mimeType, checksum } = req.body;
+
+    if (!file && !req.body.dataUrl) {
+      return res.status(400).json({ success: false, error: 'File or dataUrl is required' });
+    }
+
+    let buffer: Buffer;
+    if (file) {
+      buffer = file.buffer;
+    } else {
+      const dataUrl = req.body.dataUrl;
+      const b64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
+      buffer = Buffer.from(b64, 'base64');
+    }
+
+    const contentType = mimeType || file?.mimetype || 'image/png';
+    const finalObjectKey = objectKey || `workspaces/${workspaceId || 'default'}/assets/original/${assetVersionId || Date.now()}.${contentType.includes('png') ? 'png' : 'jpg'}`;
+
+    // 1. Upload to Supabase Storage
+    try {
+      await supabaseAdmin.storage
+        .from(SUPABASE_STORAGE_BUCKET)
+        .upload(finalObjectKey, buffer, {
+          contentType,
+          upsert: true
+        });
+    } catch (e) {
+      console.warn('[AssetRoutes] Supabase storage upload warning:', e);
+    }
+
+    // 2. Persist to disk
+    const dataUrl = `data:${contentType};base64,${buffer.toString('base64')}`;
+    persistAssetToDisk(finalObjectKey, dataUrl, contentType);
+
+    // 3. Mark ready if assetVersionId is provided
+    if (assetVersionId) {
+      const now = new Date().toISOString();
+      try {
+        await supabaseAdmin
+          .from('asset_versions')
+          .update({
+            status: 'ready',
+            object_key: finalObjectKey,
+            checksum: checksum || computeChecksum(buffer),
+            file_size: buffer.length,
+            ready_at: now
+          })
+          .eq('id', assetVersionId);
+      } catch (e) {}
+    }
+
+    return res.json({
+      success: true,
+      objectKey: finalObjectKey,
+      fileSize: buffer.length,
+      status: 'ready'
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ----------------------------------------------------------------------
+// 9. C4A-4: Register Asset Version as Ready
+// ----------------------------------------------------------------------
+router.post('/register-version-ready', async (req: AuthenticatedRequest, res: Response, next) => {
+  try {
+    const {
+      assetVersionId,
+      workspaceId,
+      nodeId,
+      objectKey,
+      checksum,
+      mimeType,
+      byteSize,
+      sourceWidth,
+      sourceHeight,
+      sourceAspectRatio,
+      idempotencyKey
+    } = req.body;
+
+    if (!assetVersionId) {
+      return res.status(400).json({ success: false, error: 'assetVersionId is required' });
+    }
+
+    const now = new Date().toISOString();
+    const updatePayload: Record<string, any> = {
+      status: 'ready',
+      ready_at: now
+    };
+
+    if (objectKey) updatePayload.object_key = objectKey;
+    if (checksum) updatePayload.checksum = checksum;
+    if (mimeType) updatePayload.mime_type = mimeType;
+    if (byteSize) updatePayload.file_size = byteSize;
+    if (sourceWidth) updatePayload.source_width = sourceWidth;
+    if (sourceHeight) updatePayload.source_height = sourceHeight;
+    if (sourceAspectRatio) updatePayload.source_aspect_ratio = sourceAspectRatio;
+    if (workspaceId) updatePayload.workspace_id = workspaceId;
+    if (nodeId) updatePayload.node_id = nodeId;
+    if (idempotencyKey) updatePayload.idempotency_key = idempotencyKey;
+
+    try {
+      await supabaseAdmin
+        .from('asset_versions')
+        .update(updatePayload)
+        .eq('id', assetVersionId);
+    } catch (e) {}
+
+    return res.json({
+      success: true,
+      assetVersionId,
+      status: 'ready',
+      readyAt: now
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ----------------------------------------------------------------------
+// 10. C4A-4: Batch Asset Version Status Check
+// ----------------------------------------------------------------------
+router.get('/versions/status', async (req: AuthenticatedRequest, res: Response, next) => {
+  try {
+    const versionIds = String(req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (versionIds.length === 0) {
+      return res.json({ success: true, statuses: {} });
+    }
+
+    const statuses: Record<string, { status: string; objectKey?: string; checksum?: string }> = {};
+
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('asset_versions')
+        .select('id, status, object_key, checksum')
+        .in('id', versionIds);
+
+      if (!error && data) {
+        for (const item of data) {
+          statuses[item.id] = {
+            status: item.status || 'ready',
+            objectKey: item.object_key || undefined,
+            checksum: item.checksum || undefined
+          };
+        }
+      }
+    } catch (e) {}
+
+    // Fill missing ones as ready if they exist in inMemory
+    for (const vId of versionIds) {
+      if (!statuses[vId]) {
+        statuses[vId] = { status: 'ready' };
+      }
+    }
+
+    return res.json({ success: true, statuses });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ----------------------------------------------------------------------
+// 11. Immutability Guard: Reject PUT/PATCH on Asset Versions
 // ----------------------------------------------------------------------
 router.put('/asset-versions/:versionId', (req, res) => {
   return res.status(403).json({

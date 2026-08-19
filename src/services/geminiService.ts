@@ -5,19 +5,6 @@ import { supabase } from "../lib/supabase";
 
 const MAX_RETRIES = 3;
 
-/**
- * Gets the current user's ID to be sent in the x-user-id header 
- * for token accounting proxy endpoint.
- */
-export const getUserId = async () => {
-    try {
-      const { data } = await supabase.auth.getSession();
-      return data?.session?.user?.id || 'system';
-    } catch (e) {
-      return 'system';
-    }
-}
-
 export const getUserAuthHeader = async () => {
     try {
       const { data } = await supabase.auth.getSession();
@@ -31,19 +18,17 @@ export const getUserAuthHeader = async () => {
 }
 
 const createGenAIClient = async (onLog?: (msg: string) => void) => {
-  const dummyOrRealKey = process.env.ROUTERHUB_API_KEY || process.env.GEMINI_API_KEY || process.env.API_KEY || "proxy-key";
-  const userId = await getUserId();
   const authHeader = await getUserAuthHeader();
   
-  const headers: any = {
-    'x-user-id': userId
-  };
+  const headers: any = {};
   if (authHeader) {
     headers['Authorization'] = authHeader;
   }
   
   return new GoogleGenAI({ 
-    apiKey: dummyOrRealKey,
+    // This is only a non-secret SDK placeholder. The real Provider key is
+    // resolved and used exclusively by the server-side gateway.
+    apiKey: "server-proxy",
     httpOptions: { 
       baseUrl: window.location.origin,
       headers,
@@ -57,15 +42,97 @@ const API_SUPPORTED_ASPECT_RATIOS = new Set<SupportedAspectRatio>([
   '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'
 ]);
 
-export const resolveClientImageToBase64 = async (imgStr: string): Promise<string> => {
-  if (!imgStr || typeof imgStr !== 'string') return '';
-  const trimmed = imgStr.trim();
+export interface ResolvedClientImage {
+  base64Data: string;
+  mimeType?: 'image/png' | 'image/jpeg' | 'image/webp';
+}
+
+export const detectMimeFromBase64 = (b64: string): 'image/png' | 'image/jpeg' | 'image/webp' | undefined => {
+  if (!b64 || typeof b64 !== 'string') return undefined;
+  const clean = b64.replace(/[\r\n\s]/g, '');
+  if (clean.startsWith('/9j/')) return 'image/jpeg';
+  if (clean.startsWith('iVBORw0K') || clean.startsWith('iVBORw0KGgo')) return 'image/png';
+  if (clean.startsWith('UklGR')) return 'image/webp';
+  return undefined;
+};
+
+export const resolveClientImageDetailed = async (imgInput: string | Blob | File): Promise<ResolvedClientImage> => {
+  if (!imgInput) return { base64Data: '' };
+
+  if (typeof imgInput !== 'string') {
+    let declaredMime: 'image/png' | 'image/jpeg' | 'image/webp' | undefined;
+    if (imgInput.type) {
+      const typeLower = imgInput.type.toLowerCase().trim();
+      if (typeLower === 'image/jpeg' || typeLower === 'image/jpg') declaredMime = 'image/jpeg';
+      else if (typeLower === 'image/png') declaredMime = 'image/png';
+      else if (typeLower === 'image/webp') declaredMime = 'image/webp';
+    }
+
+    if (typeof FileReader === 'undefined') {
+      try {
+        const buf = Buffer.from(await imgInput.arrayBuffer());
+        const base64Data = buf.toString('base64');
+        const detectedMime = detectMimeFromBase64(base64Data);
+        return {
+          base64Data,
+          mimeType: detectedMime || declaredMime
+        };
+      } catch (e) {
+        return { base64Data: '' };
+      }
+    }
+
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = (reader.result as string) || '';
+        let base64Data = result;
+        let mimeFromDataUrl: 'image/png' | 'image/jpeg' | 'image/webp' | undefined;
+        if (result.startsWith('data:')) {
+          const parts = result.split(',');
+          base64Data = parts[1] || '';
+          const match = parts[0].match(/^data:(image\/[a-zA-Z+]+);base64/i);
+          if (match) {
+            const m = match[1].toLowerCase();
+            if (m === 'image/jpeg' || m === 'image/jpg') mimeFromDataUrl = 'image/jpeg';
+            else if (m === 'image/png') mimeFromDataUrl = 'image/png';
+            else if (m === 'image/webp') mimeFromDataUrl = 'image/webp';
+          }
+        }
+        base64Data = base64Data.replace(/[\r\n\s]/g, '');
+        const detectedMime = detectMimeFromBase64(base64Data);
+        const mimeType = detectedMime || mimeFromDataUrl || declaredMime;
+        resolve({ base64Data, mimeType });
+      };
+      reader.onerror = () => resolve({ base64Data: '' });
+      reader.readAsDataURL(imgInput);
+    });
+  }
+
+  const trimmed = imgInput.trim();
+
   if (trimmed.startsWith('data:')) {
-    return trimmed.split(',')[1] || '';
+    const parts = trimmed.split(',');
+    const base64Data = (parts[1] || '').replace(/[\r\n\s]/g, '');
+    let mimeFromDataUrl: 'image/png' | 'image/jpeg' | 'image/webp' | undefined;
+    const match = parts[0].match(/^data:(image\/[a-zA-Z+]+);base64/i);
+    if (match) {
+      const m = match[1].toLowerCase();
+      if (m === 'image/jpeg' || m === 'image/jpg') mimeFromDataUrl = 'image/jpeg';
+      else if (m === 'image/png') mimeFromDataUrl = 'image/png';
+      else if (m === 'image/webp') mimeFromDataUrl = 'image/webp';
+    }
+    const detectedMime = detectMimeFromBase64(base64Data);
+    return { base64Data, mimeType: detectedMime || mimeFromDataUrl };
   }
+
   if (trimmed.includes(',')) {
-    return trimmed.split(',')[1] || trimmed;
+    const parts = trimmed.split(',');
+    const base64Data = (parts[1] || trimmed).replace(/[\r\n\s]/g, '');
+    const detectedMime = detectMimeFromBase64(base64Data);
+    return { base64Data, mimeType: detectedMime };
   }
+
   if (trimmed.startsWith('/api/') || trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('obj_')) {
     let fetchUrl = trimmed;
     if (trimmed.startsWith('obj_')) {
@@ -74,22 +141,39 @@ export const resolveClientImageToBase64 = async (imgStr: string): Promise<string
     try {
       const resp = await fetch(fetchUrl);
       if (resp.ok) {
+        let contentTypeMime: 'image/png' | 'image/jpeg' | 'image/webp' | undefined;
+        const ct = resp.headers.get('content-type')?.toLowerCase();
+        if (ct) {
+          if (ct.includes('image/png')) contentTypeMime = 'image/png';
+          else if (ct.includes('image/jpeg') || ct.includes('image/jpg')) contentTypeMime = 'image/jpeg';
+          else if (ct.includes('image/webp')) contentTypeMime = 'image/webp';
+        }
         const blob = await resp.blob();
-        return new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const result = (reader.result as string) || '';
-            resolve(result.includes(',') ? result.split(',')[1] : result);
-          };
-          reader.onerror = () => resolve('');
-          reader.readAsDataURL(blob);
-        });
+        const res = await resolveClientImageDetailed(blob);
+        return {
+          base64Data: res.base64Data,
+          mimeType: res.mimeType || contentTypeMime
+        };
       }
     } catch (e) {
-      console.warn(`[resolveClientImageToBase64] Failed to fetch ${fetchUrl}:`, e);
+      console.warn(`[resolveClientImageDetailed] Failed to fetch ${fetchUrl}:`, e);
     }
   }
-  return trimmed;
+
+  const cleanBase64 = trimmed.replace(/[\r\n\s]/g, '');
+  const detectedMime = detectMimeFromBase64(cleanBase64);
+  return { base64Data: cleanBase64, mimeType: detectedMime };
+};
+
+export const resolveClientImageToBase64 = async (imgStr: string): Promise<string> => {
+  const res = await resolveClientImageDetailed(imgStr);
+  return res.base64Data;
+};
+
+const getBase64DataUrlPrefix = (b64: string): string => {
+  if (b64.startsWith('/9j/')) return 'data:image/jpeg;base64,';
+  if (b64.startsWith('UklGR')) return 'data:image/webp;base64,';
+  return 'data:image/png;base64,';
 };
 
 /**
@@ -105,7 +189,7 @@ const compressImageForAnalysis = async (base64Str: string, maxWidth = 1024, qual
       return;
     }
     const img = new Image();
-    const prefix = cleanB64.startsWith('data:') ? '' : 'data:image/png;base64,';
+    const prefix = cleanB64.startsWith('data:') ? '' : getBase64DataUrlPrefix(cleanB64);
     img.src = `${prefix}${cleanB64}`;
     img.onload = () => {
       let { width, height } = img;
@@ -156,13 +240,14 @@ const compositeImageWithOverlay = (base64Str: string, overlayBase64Str: string, 
       return;
     }
     const img = new Image();
-    const prefix = base64Str.startsWith('data:') ? '' : 'data:image/png;base64,';
+    const prefix = base64Str.startsWith('data:') ? '' : getBase64DataUrlPrefix(base64Str);
     img.src = `${prefix}${base64Str}`;
     img.onload = () => {
       let { width, height } = img;
       
       const overlayimg = new Image();
-      overlayimg.src = overlayBase64Str.startsWith('data:') ? overlayBase64Str : `data:image/png;base64,${overlayBase64Str}`;
+      const overlayPrefix = overlayBase64Str.startsWith('data:') ? '' : getBase64DataUrlPrefix(overlayBase64Str);
+      overlayimg.src = overlayBase64Str.startsWith('data:') ? overlayBase64Str : `${overlayPrefix}${overlayBase64Str}`;
       overlayimg.onload = () => {
         if (width > height) {
           if (width > maxWidth) {
@@ -363,25 +448,11 @@ export const generateEditedImage = async (
   seed: number | undefined,
   onLog: (message: string) => void
 ): Promise<{ imageUrl: string, pointsUsed: number, actualModel?: string, provider?: string, cropRetentionRate?: number, finalFitModeUsed?: string }> => {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-  if (!apiKey) {
-    onLog("Error: API Key not found.");
-    throw new Error("API Key not found in environment variables");
-  }
+  // Preserve the explicit UI selection. The server-side capability registry is
+  // the sole authority for aliases, transport selection and supported intents.
+  const modelName: string = modelType;
 
-  // Map UI model selection to SDK model names
-  let modelName: string = modelType;
-  if (modelType === 'gemini-3-pro' || modelType === 'gemini-2.5-pro' || modelType === 'google/gemini-3-pro-image-preview' || modelType === 'google/gemini-3-pro-image' || modelType === 'gemini-3-pro-image' || modelType === 'gemini-3-pro-image-preview') {
-    modelName = 'imagen-3.0-generate-002';
-  } else if (modelType === 'gemini-3-flash' || modelType === 'gemini-2.5-flash' || modelType === 'gemini-3.1-flash-image' || modelType === 'gemini-3.1-flash-image-preview') {
-    modelName = 'gemini-2.5-flash-image';
-  } else if (modelType === 'gpt-image-2' || modelType === 'openai/gpt-image-2') {
-    modelName = 'gpt-image-2';
-  }
-
-  onLog(`Initializing Gemini client with model: ${modelName}`);
-
-  const ai = await createGenAIClient(onLog);
+  onLog(`Selected generation model: ${modelName}`);
 
   // Prepare content parts
   onLog(`Encoding ${images.length} input images...`);
@@ -457,30 +528,61 @@ export const generateEditedImage = async (
       const payload = {
         prompt: finalPrompt,
         model: modelName,
+        generationIntent: images.length > 0 ? 'image_edit' : 'text_to_image',
         aspectRatio: aspectRatio,
         resolution: typeof resolution === 'string' && ['512px', '1K', '2K', '4K'].includes(resolution) ? resolution : '2K',
         seed: seed,
-        images: await Promise.all(images.map(async img => {
+        images: await Promise.all(images.map(async (img, index) => {
           const rawData = img.base64Data || '';
-          const cleanData = await resolveClientImageToBase64(rawData);
-          let mimeType = img.mimeType || 'image/jpeg';
-          if (rawData.startsWith('data:')) {
-            const header = rawData.split(',')[0];
-            if (header.includes('image/png')) mimeType = 'image/png';
-            else if (header.includes('image/webp')) mimeType = 'image/webp';
-            else if (header.includes('image/jpeg') || header.includes('image/jpg')) mimeType = 'image/jpeg';
+          const isJsonMultiModel = modelName.includes('gpt-image-2-all');
+          if (isJsonMultiModel) {
+            const publicUrl = img.previewUrl?.startsWith('https://')
+              ? img.previewUrl
+              : (rawData.startsWith('https://') ? rawData : '');
+            if (!publicUrl) {
+              throw new Error('gpt-image-2-all 仅支持可公开访问的 HTTPS 参考图 URL；请先将参考图保存为云端资产。');
+            }
+            return {
+              url: publicUrl,
+              mimeType: img.mimeType,
+              role: img.role || (index === 0 ? 'primary_product' : 'style_reference'),
+              referenceAssetId: img.referenceAssetId || img.id,
+              order: img.order ?? index
+            };
           }
+          const resolved = await resolveClientImageDetailed(rawData);
+          const cleanData = resolved.base64Data;
+          const detectedFromBinary = detectMimeFromBase64(cleanData);
+          const mimeType = detectedFromBinary || resolved.mimeType || img.mimeType || 'image/png';
           return {
             mimeType,
-            data: cleanData
+            data: cleanData,
+            role: img.role || (index === 0 ? 'primary_product' : 'style_reference'),
+            referenceAssetId: img.referenceAssetId || img.id,
+            order: img.order ?? index
           };
-        }))
+        })),
+        mask: !modelName.includes('gpt-image-2-all') && images[0]?.maskDataUrl ? {
+          data: images[0].maskDataUrl,
+          mimeType: 'image/png',
+          targetReferenceAssetId: images[0].referenceAssetId || images[0].id
+        } : undefined
       };
+
+      if ((import.meta as any).env?.DEV || (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production')) {
+        payload.images.forEach((img: any) => {
+          console.debug('[image-reference]', {
+            assetId: img.referenceAssetId,
+            declaredMimeType: img.mimeType,
+            base64Prefix: (img.data || img.url || '').slice(0, 12),
+            role: img.role
+          });
+        });
+      }
 
       const authHeader = await getUserAuthHeader();
       const headers: any = { 
-        'Content-Type': 'application/json',
-        'x-user-id': await getUserId()
+        'Content-Type': 'application/json'
       };
       if (authHeader) {
         headers['Authorization'] = authHeader;
@@ -504,12 +606,31 @@ export const generateEditedImage = async (
       }
       
       if (!response.ok || data.error) {
-        throw new Error(data.message || (typeof data.error === 'string' ? data.error : data.error?.message) || response.statusText || `HTTP Error ${response.status}`);
+        const apiError: any = new Error(data.message || (typeof data.error === 'string' ? data.error : data.error?.message) || response.statusText || `HTTP Error ${response.status}`);
+        apiError.category = data.error?.category;
+        apiError.code = data.error?.code;
+        apiError.retryable = data.error?.retryable ?? response.status >= 500;
+        apiError.requestId = data.error?.requestId;
+        throw apiError;
       }
 
       onLog("Response received. Verifying payload...");
 
       // Validation logic
+      if (Array.isArray(data.images) && data.images.length > 0) {
+        const image = data.images.find((item: any) => item?.data?.length > 100);
+        if (image) {
+          onLog("Image data validated. Integrity check passed.");
+          return {
+            imageUrl: `data:${image.mimeType || 'image/png'};base64,${image.data}`,
+            pointsUsed: data.points_deducted || 0,
+            actualModel: data.actualModel || modelName,
+            provider: data.provider,
+            cropRetentionRate: data.cropRetentionRate,
+            finalFitModeUsed: data.finalFitModeUsed
+          };
+        }
+      }
       if (data.candidates && data.candidates.length > 0) {
         const content = data.candidates[0].content;
         if (content && content.parts) {
@@ -523,8 +644,8 @@ export const generateEditedImage = async (
                  return {
                    imageUrl: `data:${mimeType};base64,${base64Str}`,
                    pointsUsed: data.points_deducted || 0,
-                   actualModel: data.actualModel || 'gpt-image-2',
-                   provider: data.provider || 'openai',
+                   actualModel: data.actualModel || modelName,
+                   provider: data.provider,
                    cropRetentionRate: data.cropRetentionRate,
                    finalFitModeUsed: data.finalFitModeUsed
                  };
@@ -543,17 +664,9 @@ export const generateEditedImage = async (
       lastError = error;
       const errorMessage = error?.message || JSON.stringify(error);
       onLog(`Error during attempt ${attempt}: ${errorMessage}`);
-      
-      // Fallback to a more stable model if we hit a 503 Service Unavailable
-      if (errorMessage.includes('503') || errorMessage.includes('high demand') || errorMessage.includes('UNAVAILABLE')) {
-        if (modelName !== 'gemini-2.5-flash-image') {
-            onLog(`Model ${modelName} is overloaded. Falling back to gemini-2.5-flash-image...`);
-            modelName = 'gemini-2.5-flash-image';
-            // Reset config that might not be supported by the fallback model
-            if (config.imageConfig) {
-                delete config.imageConfig.imageSize;
-            }
-        }
+      if (error?.retryable === false) {
+        onLog(`Non-retryable provider error${error?.code ? ` (${error.code})` : ''}; stopping retries.`);
+        break;
       }
       
       if (attempt < MAX_RETRIES) {

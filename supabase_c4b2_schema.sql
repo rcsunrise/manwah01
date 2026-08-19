@@ -219,3 +219,47 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+-- ==============================================================================
+-- 6. Typography Specs Table (C4B-3: 排版 Content Spec 契约表)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS public.typography_specs (
+  id TEXT PRIMARY KEY,
+  user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  project_id TEXT NOT NULL,
+  canvas_id TEXT NOT NULL,
+  scene_key TEXT NOT NULL,
+  copy_sku_id TEXT NOT NULL REFERENCES public.copy_skus(id) ON DELETE CASCADE,
+  copy_version_id TEXT NOT NULL REFERENCES public.copy_versions(id) ON DELETE CASCADE,
+  product_dna_version_id TEXT DEFAULT NULL,
+  asset_version_id TEXT DEFAULT NULL,
+  slots JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'valid',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT unique_typography_canvas_scene UNIQUE (canvas_id, scene_key)
+);
+
+-- Enable RLS for typography_specs
+ALTER TABLE public.typography_specs ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Authenticated users can select own typography specs') THEN
+    CREATE POLICY "Authenticated users can select own typography specs"
+      ON public.typography_specs FOR SELECT
+      TO authenticated
+      USING (auth.uid() = user_id);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Authenticated users can manage own typography specs') THEN
+    CREATE POLICY "Authenticated users can manage own typography specs"
+      ON public.typography_specs FOR ALL
+      TO authenticated
+      USING (auth.uid() = user_id);
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_typography_specs_canvas_scene ON public.typography_specs(canvas_id, scene_key);
+CREATE INDEX IF NOT EXISTS idx_typography_specs_copy_ver ON public.typography_specs(copy_version_id);
+

@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { ImageAttachment, MaskRect, MaskStroke } from '../types';
 import { Upload, X, ImageIcon, Undo2, Sparkles, MousePointer2 } from './IconsNew';
 import { ProductChannelMask } from './ProductChannelMaskNew';
+import { supabase } from '../lib/supabase';
 
 interface ImageUploaderProps {
   images: ImageAttachment[];
@@ -62,8 +63,12 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
       formData.append('clean_image', cleanImageBlob, 'clean.png');
       formData.append('mask_image', maskImageBlob, 'mask.png');
 
+      const session = (await supabase.auth.getSession()).data.session;
       fetch('/api/pre_process/mask', {
         method: 'POST',
+        headers: session?.access_token
+          ? { 'Authorization': `Bearer ${session.access_token}` }
+          : undefined,
         body: formData,
       }).catch(err => console.error('Background mask upload failed:', err));
     } catch (error) {
@@ -85,13 +90,13 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
       if (!file.type.startsWith('image/')) continue;
 
       try {
-        const { base64Data, previewUrl, width, height } = await processFile(file);
+        const { base64Data, previewUrl, mimeType, width, height } = await processFile(file);
         newImages.push({
           id: crypto.randomUUID(),
           file,
           previewUrl,
           base64Data,
-          mimeType: file.type,
+          mimeType,
           width,
           height
         });
@@ -159,7 +164,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
     }
   };
 
-  const processFile = (file: File): Promise<{ base64Data: string; previewUrl: string; width: number; height: number }> => {
+  const processFile = (file: File): Promise<{ base64Data: string; previewUrl: string; mimeType: string; width: number; height: number }> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = (e) => {
@@ -202,6 +207,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
                  resolve({ 
                      base64Data, 
                      previewUrl: dataUrl, 
+                     mimeType: 'image/jpeg',
                      width, 
                      height 
                  });
@@ -211,6 +217,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
                  resolve({ 
                      base64Data, 
                      previewUrl: result, 
+                     mimeType: file.type || 'image/png',
                      width: img.width, 
                      height: img.height 
                  });
@@ -221,6 +228,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
              resolve({ 
                  base64Data, 
                  previewUrl: result, 
+                 mimeType: file.type || 'image/png',
                  width: 0, 
                  height: 0 
              });

@@ -12,6 +12,9 @@ export interface AgentMessage {
   sender: 'agent' | 'user';
   text: string;
   timestamp: string;
+  status?: 'pending' | 'streaming' | 'completed' | 'failed';
+  error_code?: string;
+  conversation_id?: string;
 }
 
 export interface WelcomeNodeData extends Record<string, unknown> {
@@ -144,6 +147,10 @@ export interface GeneratedImageNodeData extends Record<string, unknown> {
   screenTitle: string;
   imageUrl: string;
   dimensions?: string;
+  sourceWidth?: number;
+  sourceHeight?: number;
+  sourceAspectRatio?: string;
+  checksum?: string;
   aspectRatio?: string;
   model?: string;
   provider?: string;
@@ -195,7 +202,8 @@ export type SaveStatus =
   | 'save_failed' 
   | 'restore_failed'
   | 'version_conflict'
-  | 'offline_pending';
+  | 'offline_pending'
+  | 'syncing_assets';
 
 export interface ViewportState {
   x: number;
@@ -320,4 +328,127 @@ export interface CopyVersionRecord {
   created_at: string;
   isCurrent?: boolean;
 }
+
+// C4B-3: Typography Spec Data Types
+export type TypographySemanticRole =
+  | 'eyebrow'
+  | 'headline'
+  | 'subheadline'
+  | 'body'
+  | 'selling_point'
+  | 'feature_label'
+  | 'spec'
+  | 'cta'
+  | 'disclaimer';
+
+export type TypographyOverflowPolicy =
+  | 'truncate'
+  | 'shrink'
+  | 'hide_low_priority'
+  | 'manual_review';
+
+export interface TypographySlotSpec {
+  slotKey: string;
+  semanticRole: TypographySemanticRole;
+  sourceField: string;
+  content: string;
+  enabled: boolean;
+  priority: number; // 1 = highest priority
+  maxCharacters: number;
+  maxLines: number;
+  overflowPolicy: TypographyOverflowPolicy;
+}
+
+export interface TypographySpecV1 {
+  id: string;
+  userId?: string;
+  user_id?: string;
+  projectId: string;
+  project_id?: string;
+  canvasId: string;
+  canvas_id?: string;
+  sceneKey: string;
+  scene_key?: string;
+  copySkuId: string;
+  copy_sku_id?: string;
+  copyVersionId: string;
+  copy_version_id?: string;
+  productDnaVersionId?: string | null;
+  product_dna_version_id?: string | null;
+  assetVersionId?: string | null;
+  asset_version_id?: string | null;
+  slots: TypographySlotSpec[];
+  status: 'valid' | 'overflow_warning' | 'manual_review' | 'archived';
+  createdAt?: string;
+  created_at?: string;
+  updatedAt?: string;
+  updated_at?: string;
+}
+
+// ==============================================================================
+// G0-1: Agent Continuous Dialogue & Conversation Persistence Types
+// ==============================================================================
+export interface AgentContextSnapshot {
+  projectId: string;
+  canvasId: string;
+  activeSceneKey?: string;
+  selectedNodeIds?: string[];
+  productDnaVersionId?: string | null;
+  assetVersionId?: string | null;
+  copyVersionId?: string | null;
+  typographySpecId?: string | null;
+}
+
+export interface AgentConversationRecord {
+  id: string;
+  user_id: string;
+  project_id: string;
+  canvas_id: string;
+  title: string | null;
+  status: 'active' | 'archived';
+  provider: string;
+  model: string;
+  provider_conversation_id?: string | null;
+  previous_response_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentChatMessageRecord {
+  id: string;
+  conversation_id: string;
+  user_id: string;
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: {
+    text: string;
+    [key: string]: any;
+  };
+  status: 'pending' | 'streaming' | 'completed' | 'failed';
+  provider_response_id?: string | null;
+  parent_message_id?: string | null;
+  context_snapshot?: AgentContextSnapshot | null;
+  error_code?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type AgentErrorCode =
+  | 'AGENT_AUTH_ERROR'
+  | 'CONVERSATION_NOT_FOUND'
+  | 'CONVERSATION_FORBIDDEN'
+  | 'CANVAS_FORBIDDEN'
+  | 'INVALID_AGENT_CONTEXT'
+  | 'MESSAGE_TOO_LONG'
+  | 'PROVIDER_CONFIGURATION_ERROR'
+  | 'PROVIDER_AUTH_ERROR'
+  | 'PROVIDER_RATE_LIMIT'
+  | 'PROVIDER_TIMEOUT'
+  | 'PROVIDER_PROTOCOL_ERROR'
+  | 'STREAM_INTERRUPTED'
+  | 'MESSAGE_PERSISTENCE_ERROR'
+  | 'CANVAS_PERSISTENCE_UNAVAILABLE'
+  | 'API_ROUTE_NOT_FOUND'
+  | 'AGENT_API_NON_JSON_RESPONSE'
+  | 'UNKNOWN_AGENT_ERROR';
+
 

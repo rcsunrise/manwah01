@@ -4,18 +4,15 @@
 
 ## 1. 核心架构与技术栈
 
-本项目采用了**前后端同构兼容**的混合架构，既支持标准的 Node.js Express 启动（用于 Docker / Cloud Run），也支持 Vercel 的 Serverless Edge Functions 体系。
+本项目采用 React/Vite 前端与 Node.js Express 服务端的一体化架构，适合 AI Studio 导出后部署到 Cloud Run、Docker 或其他可运行 Node.js 服务的环境。
 
 *   **前端框架**: React 19 + Vite 6
 *   **前端样式**: Tailwind CSS v4, Lucide React (图标), framer-motion (动画)
 *   **路由**: `react-router-dom` 
-*   **后端服务层**: 
-    1. Express.js (`server.ts` - 用于独立部署环境)
-    2. Vercel Serverless API (`api/` 目录 - 用于 Vercel 托管)
+*   **后端服务层**: Express.js（`server.ts`）
 *   **核心 API 集成**: 
-    *   **Google Gemini API**: 核心逻辑链分析、AEP属性提取等基础 AI 能力。
-    *   **RouterHub AI proxy**: 主要接管图像生成 (`/api/routerhub/generate-image` 和 `/api/proxy`)，支持标准的 Gemini 模型和基于 OpenAI 格式的 Flux / Midjourney 等模型生成。
-    *   **Supabase / Firebase**: 结构预留（如 Supabase Storage / 本地存储）处理蒙版生成和长短期数据逻辑。
+    *   **统一模型网关**: 通过 `/api/gateway/generate-image` 和服务端 AI Client 调用后台配置的模型 Provider。
+    *   **Supabase**: 负责认证、部门 Provider 配置、Storage 与业务数据。
 
 ## 2. 关键环境变量 (Environment Variables)
 
@@ -23,32 +20,14 @@
 
 | 变量名 | 说明 | 必需 |
 | :--- | :--- | :--- |
-| `GEMINI_API_KEY` | Google Gemini 的原生 API Key。用作默认底座大模型推理和兜底生成。 | 是 |
-| `ROUTERHUB_API_KEY` | RouterHub API Key，接入它支持多模态及三方模型 (如 Flux, Midjourney 等)。有此 Key 时会自动优先接管相关请求。 | 否 (但推荐) |
-| `SUPABASE_URL` | （根据需要）上传蒙版图片所用的 Supabase 数据库 URL | 否 |
-| `SUPABASE_SERVICE_KEY` | （根据需要）上传蒙版图片所用的 Supabase 密钥 | 否 |
+| `SUPABASE_URL` | Supabase 项目 URL | 是 |
+| `SUPABASE_ANON_KEY` | Supabase 浏览器 Anon Key | 是 |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase 服务端管理密钥 | 是 |
+| `SUPABASE_STORAGE_BUCKET` | 画布资产 Bucket 名称 | 否 |
 
-## 3. 部署方案一：部署至 Vercel (推荐，最便捷)
+模型 Provider 的服务地址和凭据不再使用项目环境变量；由管理员在系统的部门或“全站系统”配置中维护。
 
-项目已经内置了 `vercel.json` 配置和 `/api` Serverless 路由结构，可直接无缝推送到 Vercel。
-
-### 步骤
-1. **代码托管**: 将从 AI Studio 下载好的源代码 ZIP 文件解压，提交到您的个人 GitHub (或 GitLab/Bitbucket) 仓库。
-2. **导入项目**: 登录 [Vercel](https://vercel.com/)，点击 `Add New... -> Project`，导入您的 GitHub 仓库。
-3. **框架配置**:
-   *   **Framework Preset**: 选择 `Vite`。
-   *   **Build Command**: Vercel 会自动解析 `package.json` 中的命令并设定为 `npm run build`。
-   *   **Output Directory**: `dist` 
-4. **环境变量设置**:
-   *   在 Vercel 部署前展开 "Environment Variables" 区域。
-   *   添加 `GEMINI_API_KEY` 和 `ROUTERHUB_API_KEY`。
-5. **点击 Deploy**: 部署并等待完成。
-
-> **Vercel 解析原理**: 项目内存在并配置了 `vercel.json` 文件和 `/api/` 文件夹。Vercel 构建时，由 `/api/proxy.ts` 等文件承担原 `server.ts` 的接口代理工作。前端路由也能自动兜底至 `index.html`。
-
----
-
-## 4. 部署方案二：部署至 Docker / 私有服务器 / 谷歌云 Cloud Run
+## 3. 部署至 AI Studio / Docker / 私有服务器 / Cloud Run
 
 本工程内部提供了一份基于 Express 的 `server.ts` 文件。在 Docker 或者私有 Node 服务器里，它将充当一个标准的全栈 Server，提供 API 代理，并同时利用 `express.static` 挂载 `dist` 前端构建产物。
 
@@ -58,12 +37,7 @@
    ```bash
    npm install
    ```
-3. **设置环境变量**:
-   在项目根目录创建一个 `.env` 文件：
-   ```env
-   GEMINI_API_KEY=your_gemini_key_here
-   ROUTERHUB_API_KEY=your_routerhub_key_here
-   ```
+3. **设置 Supabase 环境变量**：按第 2 节配置认证与数据服务所需变量。模型 Provider 凭据在系统后台配置，不写入 `.env`。
 4. **构建项目**:
    ```bash
    npm run build
@@ -89,16 +63,16 @@
    ENV PORT=3000
    CMD ["npm", "run", "start"]
    ```
-2. 构建并推送 Docker 镜像，在 Google Cloud Run 界面依据该镜像建立新服务，并将上文提到的对应 Secrets 配置进环境变量即可。
+2. 构建并推送 Docker 镜像，在 Cloud Run 建立服务，并仅将第 2 节所列 Supabase 服务端配置作为 Secrets 注入。
 
 ## 5. 项目中的特定逻辑处理注意事项
 
-* **图像转发处理**: `server.ts` 与 `/api/routerhub/generate-image.ts` 处理了 `base64` 与不同服务商 API 的兼容转换（比如调用 RouterHub 的 Flux/Midjourney 时如果目标下发只带有 URL 而非基底 base64，我们的后端代理会自动将其拉取并转换为 base64 发给前端)。
-* **API 请求流**: 核心的 Gemini 调用和流式处理会被发往 `/v1beta`，而后被 Vercel proxy（或 express 中间件）拦截并添加对应密钥，这有效保障了前端不泄露您的 API Key 密钥。
+* **图像转发处理**: `server.ts` 的统一网关处理 Base64、图片 URL 与不同 Provider 响应格式。
+* **API 请求流**: 浏览器只调用同源业务接口；服务端根据当前用户所属部门或全站配置选择 Provider，并在服务端添加凭据。
 * **蒙版（Mask）接口**: 如果使用该工具制作遮罩图或者去背景预处理功能，`/api/pre_process/mask` 会捕获文件。如果是内网使用，可能需要补充和检查 `Supabase` 那套真实的数据库连接配置。如果不涉及真实存储，目前也提供了 `dummy` 的 mock 返回结构供纯客户端流程跑通。
 
 ## 6. 总结迁移排障项
 
-1. 出错 **"API Key is missing"**: 检查平台环境变量中是否确实配置生效了对应的密钥。
-2. 出错 **RouterHub 生成无效 / Flux 失败**: 确保您的 `ROUTERHUB_API_KEY` 有效，或者 RouterHub 中绑定的付款/额度正常。
-3. 出错 **CORS** (跨域错误): 如果是拆分了前后端，并且不在同一个域下，需要在 `server.ts` 或 `api/proxy.ts` 里手动维护并放行 `Access-Control-Allow-Origin`。目前已配置为 `*` (允许全部跨域调用)。
+1. 出错 **“未配置有效 API KEY”**：检查当前用户部门或“全站系统”的 Provider 配置，不要新增旧环境变量回退。
+2. Provider 生成失败：检查后台保存的 Base URL、凭据、模型权限、额度与上游状态。
+3. 出错 **CORS**：检查 `server.ts` 的 CORS 与部署域名配置；不要恢复已经移除的开放代理接口。
